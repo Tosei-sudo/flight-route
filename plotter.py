@@ -27,8 +27,15 @@ def plot(hist: dict, waypoints: np.ndarray, path: str = 'flight_route.png', show
     azimuth    = hist['azimuth']
 
     norm = plt.Normalize(vmin=0, vmax=MAX_SPEED)
-    fixed_obs  = get_fixed_obstacles()
-    moving_obs = get_moving_obstacles()
+
+    # シミュレータと同じ条件で「関係した障害物」だけに絞る
+    all_fixed  = get_fixed_obstacles()
+    all_moving = get_moving_obstacles()
+    fixed_obs  = [o for o in all_fixed
+                  if any(o.dist_from_surface(p) < o.zone for p in pos)]
+    moving_obs = [o for o in all_moving
+                  if any(float(np.linalg.norm(p - o.pos_at(float(t)))) < o.zone
+                         for p, t in zip(pos, times))]
 
     if PLOT_3D_ONLY:
         fig = plt.figure(figsize=(10, 8))

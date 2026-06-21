@@ -111,8 +111,9 @@ class INSSensor(PositionSensor):
                accel: np.ndarray, dt: float) -> np.ndarray:
         # 真位置は参照しない — バイアス入り加速度を積分して推定
         biased_accel = accel + self._bias
+        vel_old      = self._vel.copy()
         self._vel   += biased_accel * dt
-        self._pos   += self._vel * dt
+        self._pos   += vel_old * dt
         return self._pos
 
     @property

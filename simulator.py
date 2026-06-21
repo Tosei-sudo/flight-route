@@ -191,7 +191,7 @@ class Simulator:
 
         for obs in fixed_obs:
             dist = obs.dist_from_surface(pos)
-            if 0.0 < dist < obs.zone:
+            if dist < obs.zone:
                 _add(obs.repulsion_dir(pos), dist, obs.zone)
 
         for obs in moving_obs:

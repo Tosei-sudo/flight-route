@@ -274,9 +274,9 @@ def simulate(waypoints: list, profile: str | None = None) -> dict:
             wp += 1
             continue
 
-        # 希望速度（最終WPに近づくと減速）
+        # 希望速度（最終WPに近づくと減速）ARHは全速維持（移動目標に対しブレーキ不要）
         is_final_wp = (wp == len(waypoints) - 1)
-        if is_final_wp and speed > 1.0:
+        if is_final_wp and speed > 1.0 and not in_arh:
             braking_dist = speed ** 2 / (2.0 * MAX_ACCEL)
             desired_speed = (max(10.0, MAX_SPEED * dist_horiz / (braking_dist * 2.0))
                              if dist_horiz < braking_dist * 2.0 else MAX_SPEED)
@@ -350,13 +350,13 @@ def simulate(waypoints: list, profile: str | None = None) -> dict:
                                if aim_dist > 1e-9 else vel / max(speed, 1.0) * desired_speed)
 
                 _arh_debug_step += 1
-                if _arh_debug_step <= 5:
-                    logger.info("ARH#%d t=%.1fs  pos=(%.0f,%.0f,%.0f)  vel=(%.1f,%.1f,%.1f)  "
-                                "aim=(%.0f,%.0f,%.0f)  dv=(%.1f,%.1f,%.1f)  eta=%.1fs",
+                if _arh_debug_step <= 5 or dist_3d < 1000:
+                    logger.info("ARH#%d t=%.1fs  pos=(%.0f,%.0f,%.1f)  vel=(%.1f,%.1f,%.2f)  "
+                                "aim=(%.0f,%.0f)  dv=(%.1f,%.1f,%.2f)  eta=%.2fs  dist3d=%.0f",
                                 _arh_debug_step, t,
                                 pos[0], pos[1], pos[2], vel[0], vel[1], vel[2],
-                                wp_aim[0], wp_aim[1], wp_aim[2],
-                                desired_vel[0], desired_vel[1], desired_vel[2], eta)
+                                wp_aim[0], wp_aim[1],
+                                desired_vel[0], desired_vel[1], desired_vel[2], eta, dist_3d)
 
             else:
                 # ── popup_dive: 予測着弾点へのポップアップ→ダイブ ─────────

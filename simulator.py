@@ -11,6 +11,8 @@ from config import (MAX_ACCEL, MAX_SPEED, DRAG_K, DT, GDB_OUTPUT_PATH,
                     LAUNCH_CLIMB_RATIO, TERMINAL_GUIDANCE, POPUP_DIVE, ARH,
                     TERRAIN_TIME_CONST, TERRAIN_LOOKAHEAD, NAV_MODE,
                     FLIGHT_PROFILE, LOW_VALLEY_FAN_DEG, LOW_VALLEY_RAYS, LOW_VALLEY_COST,
+                    FUEL_CAPACITY, FUEL_BURN_RATE,
+                    BATTERY_CAPACITY, BATTERY_DRAIN_RATE, GLIDE_STEER_LIMIT,
                     PopupDiveParams, ARHParams)
 from nav import make_sensor
 from terrain import terrain_floor, terrain_height_at
@@ -44,12 +46,22 @@ class SimParams:
     low_valley_fan_deg: float          = LOW_VALLEY_FAN_DEG
     low_valley_rays:    int            = LOW_VALLEY_RAYS
     low_valley_cost:    float          = LOW_VALLEY_COST
+    fuel_capacity:      float          = FUEL_CAPACITY
+    fuel_burn_rate:     float          = FUEL_BURN_RATE
+    battery_capacity:   float          = BATTERY_CAPACITY
+    battery_drain_rate: float          = BATTERY_DRAIN_RATE
+    glide_steer_limit:  float          = GLIDE_STEER_LIMIT
 
 
-# フェーズ定数
+# フライトフェーズ定数
 PHASE_LAUNCH   = 'launch'
 PHASE_CRUISE   = 'cruise'
 PHASE_TERMINAL = 'terminal'
+
+# 推進状態定数
+PROP_THRUST    = 'thrust'     # スラスト中（燃料あり）
+PROP_GLIDE     = 'glide'      # 滑空中（燃料切れ、バッテリーあり）
+PROP_BALLISTIC = 'ballistic'  # 弾道（燃料・バッテリー共に枯渇）
 
 
 def _wp_pos(entry, t: float) -> np.ndarray:
@@ -246,6 +258,15 @@ class Simulator:
         dive_start        = None
         arh_debug_step    = 0
 
+        # 燃料・バッテリー状態
+        fuel       = p.fuel_capacity
+        battery    = p.battery_capacity
+        propulsion = PROP_THRUST
+        prop_log   = [PROP_THRUST]
+        fuel_log   = [fuel]
+        batt_log   = [battery]
+        logger.info("  燃料: %.1f kg  バッテリー: %.1f Wh", fuel, battery)
+
         fixed_obs  = get_fixed_obstacles()
         moving_obs = get_moving_obstacles()
 
@@ -404,6 +425,36 @@ class Simulator:
             else:
                 accel = np.zeros(3)
 
+            # ── 推進状態・燃料／バッテリー管理 ────────────────────────────────────
+            if propulsion == PROP_THRUST:
+                thrust_mag = float(np.linalg.norm(accel))
+                fuel -= p.fuel_burn_rate * thrust_mag * p.dt
+                if fuel <= 0.0:
+                    fuel = 0.0
+                    propulsion = PROP_GLIDE
+                    logger.info("t=%6.1f s  [燃料切れ] 滑空モードへ  battery=%.0f%%",
+                                t, battery / p.battery_capacity * 100)
+
+            elif propulsion == PROP_GLIDE:
+                # 操舵加速度を速度依存で制限（速度低下 → 翼効果低下）
+                steer_lim = (p.max_accel * p.glide_steer_limit
+                             * min(1.0, speed / max(p.max_speed * 0.3, 1.0)))
+                accel_mag = float(np.linalg.norm(accel))
+                if accel_mag > steer_lim:
+                    accel = accel * (steer_lim / accel_mag)
+                battery -= p.battery_drain_rate * p.dt
+                if battery <= 0.0:
+                    battery = 0.0
+                    propulsion = PROP_BALLISTIC
+                    logger.info("t=%6.1f s  [バッテリー切れ] 弾道飛行へ", t)
+
+            else:  # PROP_BALLISTIC
+                accel = np.zeros(3)
+
+            prop_log.append(propulsion)
+            fuel_log.append(fuel)
+            batt_log.append(battery)
+
             # 対気速度（風に乗った気塊に対する相対速度）で抗力を計算
             lat_p, lon_p = local_to_geo(pos)
             wind        = _wind_field.wind_enu(lat_p, lon_p, float(pos[2]))
@@ -478,6 +529,9 @@ class Simulator:
             'elevation':    elevation,
             'azimuth':      azimuth,
             'phase':        np.array(phase_log),
+            'propulsion':   np.array(prop_log),
+            'fuel':         np.array(fuel_log),
+            'battery':      np.array(batt_log),
             'hit_ground':   hit_ground,
             'profile_used': _profile,
         }

@@ -3,8 +3,9 @@ PLOT_3D_ONLY = False   # True: 3D軌道のみ表示 / False: 全グラフ表示
 OUTPUT_DIR    = 'result'            # 出力先フォルダ（存在しなければ自動作成）
 SAVE_CSV      = True                # True: テレメトリーCSVを保存
 CSV_PATH      = 'result/telemetry.csv'
-SAVE_GEOJSON  = True                # True: GeoJSON (EPSG:4326) を保存
-GEOJSON_PATH  = 'result/flight_route.geojson'
+SAVE_GDB      = True                # True: ArcGIS File GDB を保存（arcpy不可時はGeoJSONにフォールバック）
+GDB_OUTPUT_PATH = 'result/flight_route.gdb'
+GEOJSON_PATH  = 'result/flight_route.geojson'  # GDB不可時のフォールバックパス
 PLOT_PATH     = 'result/flight_route.png'
 LOG_PATH      = 'result/simulation.log'
 
@@ -32,14 +33,14 @@ DRAG_K = 5e-5   # m⁻¹
 FLIGHT_PROFILE = 'standard'
 
 # low プロファイル専用: 谷探索パラメータ
-LOW_VALLEY_FAN_DEG = 90.0   # 谷スキャンの角度幅 ±度（大きいほど大回りを許容）
-LOW_VALLEY_RAYS    = 31     # スキャン本数（奇数推奨、正面を含む）
+LOW_VALLEY_FAN_DEG = 60.0   # 谷スキャンの角度幅 ±度（大きいほど大回りを許容）
+LOW_VALLEY_RAYS    = 61     # スキャン本数（奇数推奨、正面を含む）
 LOW_VALLEY_COST    = 10.0  # 迂回コスト [m]（小さいほど積極的に遠回り）
 
 # ── 地形追従 ─────────────────────────────────────────────────────────────────
 DEM_WIDE_DIR   = 'DEM/WIDE'    # 広域DEM（30m）フォルダ。*.dt2 / *.tif を自動検索
 DEM_DETAIL_DIR = 'DEM/DETAIL'  # 詳細DEM（5m）フォルダ。WIDE より優先して使用
-TERRAIN_CLEARANCE   = 50.0   # m  地形上面からの最低クリアランス
+TERRAIN_CLEARANCE   = 75.0   # m  地形上面からの最低クリアランス
 TERRAIN_LOOKAHEAD   = 15.0   # s  先読み時間
 TERRAIN_TIME_CONST  =  3.0   # s  地形追従の垂直制御時定数（小さいほど急峻に反応）
 
@@ -94,8 +95,8 @@ def _moving_ship(t):
     return (lat0, lon, 0)
 
 GEO_WAYPOINTS = [
-    (34.49480, 135.30278, 0),  # 出発点（固定）
-    (35.987488, 135.006355, 0),  # 出発点（固定）
+    (45.39521, 141.76507, 0),  # 出発点（固定）
+    (41.944442, 143.231490, 0),  # 出発点（固定）
     # _moving_ship,               # 目的地（移動）
 ]
 

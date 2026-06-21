@@ -23,7 +23,7 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 from config import (OUTPUT_DIR, SAVE_CSV, CSV_PATH,
-                    SAVE_GEOJSON, GEOJSON_PATH, PLOT_PATH, LOG_PATH,
+                    SAVE_GDB, GDB_OUTPUT_PATH, PLOT_PATH, LOG_PATH,
                     MAX_ACCEL, MAX_SPEED, G)
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ from geo import GEO_WAYPOINTS, local_to_geo, geo_to_local_pt
 from terrain import terrain_height_at
 from simulator import Simulator, SimParams
 from exporter import save_csv
-from geojson_export import save_geojson
+from gdb_export import save_gdb
 from plotter import plot
 
 
@@ -114,8 +114,8 @@ def _run_single(wp_resolvers: list, args) -> None:
     if SAVE_CSV:
         save_csv(hist, CSV_PATH)
         logger.info("保存: %s", CSV_PATH)
-    if SAVE_GEOJSON:
-        save_geojson(hist, WP_MSL_FINAL, GEOJSON_PATH)
+    if SAVE_GDB:
+        save_gdb(hist, WP_MSL_FINAL, GDB_OUTPUT_PATH)
 
     plot(hist, WP_MSL_FINAL, PLOT_PATH, show=not args.no_plot)
     logger.info("保存: %s", PLOT_PATH)
@@ -156,8 +156,8 @@ def _run_compare(wp_resolvers: list, args) -> None:
     if SAVE_CSV:
         save_csv(hist0, CSV_PATH)
         logger.info("保存(Instance 0): %s", CSV_PATH)
-    if SAVE_GEOJSON:
-        save_geojson(hist0, WP_MSL, GEOJSON_PATH)
+    if SAVE_GDB:
+        save_gdb(hist0, WP_MSL, GDB_OUTPUT_PATH)
 
     plot(hist0, WP_MSL, PLOT_PATH, show=not args.no_plot)
     logger.info("保存: %s", PLOT_PATH)

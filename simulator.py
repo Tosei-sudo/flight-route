@@ -313,7 +313,7 @@ class Simulator:
                 desired_speed = p.max_speed
 
             floor_z    = terrain_floor(nav_pos, vel, speed)
-            time_to_go = dist_horiz / speed if speed > 1.0 else float('inf')
+            time_to_go = dist_3d / speed if speed > 1.0 else float('inf')
 
             if phase == PHASE_LAUNCH and nav_pos[2] >= floor_z:
                 phase = PHASE_CRUISE

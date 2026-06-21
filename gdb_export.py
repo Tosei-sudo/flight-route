@@ -71,135 +71,144 @@ def _area_ring(vertices_enu: np.ndarray) -> list[tuple]:
 
 # ── arcpy を使った GDB 書き出し ───────────────────────────────────────────────
 
-def _save_gdb_arcpy(hist: dict, waypoints_msl: np.ndarray, gdb_path: str) -> None:
-    import arcpy
+# 各実行回でレコードを区別するための RUN_ID フォーマット
+_RUN_ID_FMT = '%Y%m%d_%H%M%S'
 
-    sr      = arcpy.SpatialReference(4326)   # WGS84
-    t_end   = float(hist['time'][-1])
-    pos_arr = hist['pos']
-
-    folder   = os.path.dirname(os.path.abspath(gdb_path)) or '.'
-    gdb_name = os.path.basename(gdb_path)
-    os.makedirs(folder, exist_ok=True)
-
-    # GDB がなければ新規作成。既存の場合は出力 FC だけ削除して再作成する
-    # （入力 FC: SPHERE_OBSTACLE / AREA_OBSTACLE は温存）
-    if not arcpy.Exists(gdb_path):
-        arcpy.management.CreateFileGDB(folder, gdb_name)
-    for fc_name in ('FLIGHT_TRAJECTORY', 'WAYPOINTS',
-                    'FIXED_OBSTACLES', 'MOVING_OBS_TRACKS'):
-        fc_path = f'{gdb_path}\\{fc_name}'
-        if arcpy.Exists(fc_path):
-            arcpy.management.Delete(fc_path)
-
-    fixed_obs  = get_fixed_obstacles()
-    moving_obs = get_moving_obstacles()
-
-    # ── FLIGHT_TRAJECTORY (Polyline Z) ───────────────────────────────────────
-    arcpy.management.CreateFeatureclass(
-        gdb_path, 'FLIGHT_TRAJECTORY', 'POLYLINE',
-        has_z='ENABLED', spatial_reference=sr)
-    fc = f'{gdb_path}\\FLIGHT_TRAJECTORY'
-    for name, ftype, length in [
+# FC 定義: (FC名, ジオメトリ種別, has_z, [(フィールド名, 型, 長さ), ...])
+_FC_DEFS = {
+    'FLIGHT_TRAJECTORY': ('POLYLINE', 'ENABLED', [
+        ('RUN_ID',        'TEXT',   20),
         ('NAME',          'TEXT',   100),
         ('FLIGHT_TIME_S', 'DOUBLE', None),
         ('TOTAL_DIST_M',  'DOUBLE', None),
         ('MAX_SPEED_MS',  'DOUBLE', None),
         ('HIT_GROUND',    'SHORT',  None),
-    ]:
-        kw = {'field_length': length} if length else {}
-        arcpy.management.AddField(fc, name, ftype, **kw)
-
-    total_dist = float(np.sum(np.linalg.norm(np.diff(pos_arr, axis=0), axis=1)))
-    line = arcpy.Polyline(
-        arcpy.Array([arcpy.Point(*_lonlatz(p)) for p in pos_arr]), sr, True)
-    with arcpy.da.InsertCursor(
-            fc, ['SHAPE@', 'NAME', 'FLIGHT_TIME_S',
-                 'TOTAL_DIST_M', 'MAX_SPEED_MS', 'HIT_GROUND']) as cur:
-        cur.insertRow([line, '飛翔軌道', t_end,
-                       round(total_dist, 1),
-                       round(float(hist['speed'].max()), 1),
-                       int(hist['hit_ground'])])
-
-    # ── WAYPOINTS (Point Z) ──────────────────────────────────────────────────
-    arcpy.management.CreateFeatureclass(
-        gdb_path, 'WAYPOINTS', 'POINT',
-        has_z='ENABLED', spatial_reference=sr)
-    fc = f'{gdb_path}\\WAYPOINTS'
-    arcpy.management.AddField(fc, 'NAME',       'TEXT',   field_length=100)
-    arcpy.management.AddField(fc, 'ALT_MSL_M',  'DOUBLE')
-
-    n_wp     = len(waypoints_msl)
-    wp_names = ['出発点'] + [f'経由点{i}' for i in range(1, n_wp - 1)] + ['目的地']
-    with arcpy.da.InsertCursor(fc, ['SHAPE@', 'NAME', 'ALT_MSL_M']) as cur:
-        for name, wp in zip(wp_names, waypoints_msl):
-            lon, lat, alt = _lonlatz(wp)
-            cur.insertRow([arcpy.PointGeometry(arcpy.Point(lon, lat, alt), sr, True),
-                           name, round(alt, 1)])
-
-    # ── FIXED_OBSTACLES (Polygon) ────────────────────────────────────────────
-    arcpy.management.CreateFeatureclass(
-        gdb_path, 'FIXED_OBSTACLES', 'POLYGON', spatial_reference=sr)
-    fc = f'{gdb_path}\\FIXED_OBSTACLES'
-    for name, ftype, length in [
+    ]),
+    'WAYPOINTS': ('POINT', 'ENABLED', [
+        ('RUN_ID',     'TEXT',   20),
+        ('NAME',       'TEXT',   100),
+        ('ALT_MSL_M',  'DOUBLE', None),
+    ]),
+    'FIXED_OBSTACLES': ('POLYGON', 'DISABLED', [
+        ('RUN_ID',       'TEXT',   20),
         ('NAME',         'TEXT',   100),
         ('OBS_TYPE',     'TEXT',   20),
         ('RADIUS_M',     'DOUBLE', None),
         ('HEIGHT_MSL_M', 'DOUBLE', None),
         ('ZONE_M',       'DOUBLE', None),
-    ]:
-        kw = {'field_length': length} if length else {}
-        arcpy.management.AddField(fc, name, ftype, **kw)
+    ]),
+    'MOVING_OBS_TRACKS': ('POLYLINE', 'ENABLED', [
+        ('RUN_ID',   'TEXT',   20),
+        ('NAME',     'TEXT',   100),
+        ('RADIUS_M', 'DOUBLE', None),
+        ('SPEED_MS', 'DOUBLE', None),
+    ]),
+}
 
+
+def _ensure_fc(arcpy, gdb_path: str, fc_name: str, sr) -> str:
+    """FC が存在しなければ作成し、不足フィールドがあれば追加する。パスを返す。"""
+    fc = f'{gdb_path}\\{fc_name}'
+    geom, has_z, fields = _FC_DEFS[fc_name]
+    if not arcpy.Exists(fc):
+        arcpy.management.CreateFeatureclass(
+            gdb_path, fc_name, geom, has_z=has_z, spatial_reference=sr)
+        for fname, ftype, length in fields:
+            kw = {'field_length': length} if length else {}
+            arcpy.management.AddField(fc, fname, ftype, **kw)
+    else:
+        # 既存 FC に不足フィールドがあれば追加（スキーマ移行対応）
+        existing = {f.name.upper() for f in arcpy.ListFields(fc)}
+        for fname, ftype, length in fields:
+            if fname.upper() not in existing:
+                kw = {'field_length': length} if length else {}
+                arcpy.management.AddField(fc, fname, ftype, **kw)
+    return fc
+
+
+def _save_gdb_arcpy(hist: dict, waypoints_msl: np.ndarray, gdb_path: str) -> None:
+    import arcpy
+    from datetime import datetime
+
+    sr      = arcpy.SpatialReference(4326)
+    t_end   = float(hist['time'][-1])
+    pos_arr = hist['pos']
+    run_id  = datetime.now().strftime(_RUN_ID_FMT)
+
+    folder   = os.path.dirname(os.path.abspath(gdb_path)) or '.'
+    gdb_name = os.path.basename(gdb_path)
+    os.makedirs(folder, exist_ok=True)
+    if not arcpy.Exists(gdb_path):
+        arcpy.management.CreateFileGDB(folder, gdb_name)
+
+    fixed_obs  = get_fixed_obstacles()
+    moving_obs = get_moving_obstacles()
+
+    # ── FLIGHT_TRAJECTORY ────────────────────────────────────────────────────
+    fc = _ensure_fc(arcpy, gdb_path, 'FLIGHT_TRAJECTORY', sr)
+    total_dist = float(np.sum(np.linalg.norm(np.diff(pos_arr, axis=0), axis=1)))
+    line = arcpy.Polyline(
+        arcpy.Array([arcpy.Point(*_lonlatz(p)) for p in pos_arr]), sr, True)
     with arcpy.da.InsertCursor(
-            fc, ['SHAPE@', 'NAME', 'OBS_TYPE',
+            fc, ['SHAPE@', 'RUN_ID', 'NAME', 'FLIGHT_TIME_S',
+                 'TOTAL_DIST_M', 'MAX_SPEED_MS', 'HIT_GROUND']) as cur:
+        cur.insertRow([line, run_id, '飛翔軌道', t_end,
+                       round(total_dist, 1),
+                       round(float(hist['speed'].max()), 1),
+                       int(hist['hit_ground'])])
+
+    # ── WAYPOINTS ────────────────────────────────────────────────────────────
+    fc = _ensure_fc(arcpy, gdb_path, 'WAYPOINTS', sr)
+    n_wp     = len(waypoints_msl)
+    wp_names = ['出発点'] + [f'経由点{i}' for i in range(1, n_wp - 1)] + ['目的地']
+    with arcpy.da.InsertCursor(fc, ['SHAPE@', 'RUN_ID', 'NAME', 'ALT_MSL_M']) as cur:
+        for name, wp in zip(wp_names, waypoints_msl):
+            lon, lat, alt = _lonlatz(wp)
+            cur.insertRow([arcpy.PointGeometry(arcpy.Point(lon, lat, alt), sr, True),
+                           run_id, name, round(alt, 1)])
+
+    # ── FIXED_OBSTACLES ──────────────────────────────────────────────────────
+    fc = _ensure_fc(arcpy, gdb_path, 'FIXED_OBSTACLES', sr)
+    with arcpy.da.InsertCursor(
+            fc, ['SHAPE@', 'RUN_ID', 'NAME', 'OBS_TYPE',
                  'RADIUS_M', 'HEIGHT_MSL_M', 'ZONE_M']) as cur:
         for obs in fixed_obs:
             if isinstance(obs, SphereObstacle):
                 ring = _circle_ring(obs.pos, obs.radius)
                 poly = arcpy.Polygon(
                     arcpy.Array([arcpy.Point(lon, lat) for lon, lat in ring]), sr)
-                cur.insertRow([poly, obs.label, 'sphere',
+                cur.insertRow([poly, run_id, obs.label, 'sphere',
                                obs.radius, None, round(obs.zone, 1)])
-
             elif isinstance(obs, BoxObstacle):
                 ring = _box_ring(obs.pos, obs.half_extents)
                 poly = arcpy.Polygon(
                     arcpy.Array([arcpy.Point(lon, lat) for lon, lat in ring]), sr)
-                cur.insertRow([poly, obs.label, 'box',
+                cur.insertRow([poly, run_id, obs.label, 'box',
                                None, float(obs.pos[2] + obs.half_extents[2]),
                                round(obs.zone, 1)])
-
             elif isinstance(obs, AreaObstacle):
                 ring = _area_ring(obs.vertices_enu)
                 poly = arcpy.Polygon(
                     arcpy.Array([arcpy.Point(lon, lat) for lon, lat in ring]), sr)
-                cur.insertRow([poly, obs.label, 'area',
+                cur.insertRow([poly, run_id, obs.label, 'area',
                                None, obs.height_msl, obs.zone_m])
 
-    # ── MOVING_OBS_TRACKS (Polyline Z) ───────────────────────────────────────
-    arcpy.management.CreateFeatureclass(
-        gdb_path, 'MOVING_OBS_TRACKS', 'POLYLINE',
-        has_z='ENABLED', spatial_reference=sr)
-    fc = f'{gdb_path}\\MOVING_OBS_TRACKS'
-    arcpy.management.AddField(fc, 'NAME',     'TEXT',   field_length=100)
-    arcpy.management.AddField(fc, 'RADIUS_M', 'DOUBLE')
-    arcpy.management.AddField(fc, 'SPEED_MS', 'DOUBLE')
-
+    # ── MOVING_OBS_TRACKS ────────────────────────────────────────────────────
+    fc = _ensure_fc(arcpy, gdb_path, 'MOVING_OBS_TRACKS', sr)
     with arcpy.da.InsertCursor(
-            fc, ['SHAPE@', 'NAME', 'RADIUS_M', 'SPEED_MS']) as cur:
+            fc, ['SHAPE@', 'RUN_ID', 'NAME', 'RADIUS_M', 'SPEED_MS']) as cur:
         for obs in moving_obs:
             n_steps = max(2, int(t_end / 5))
             times   = np.linspace(0, t_end, n_steps)
             line    = arcpy.Polyline(
                 arcpy.Array([arcpy.Point(*_lonlatz(obs.pos_at(t))) for t in times]),
                 sr, True)
-            cur.insertRow([line, obs.label,
+            cur.insertRow([line, run_id, obs.label,
                            obs.radius,
                            round(float(np.linalg.norm(obs.vel)), 1)])
 
-    logger.info("保存: %s  (4 フィーチャクラス)", gdb_path)
-    print(f"保存: {gdb_path}  (FLIGHT_TRAJECTORY / WAYPOINTS / FIXED_OBSTACLES / MOVING_OBS_TRACKS)")
+    logger.info("追記: %s  RUN_ID=%s", gdb_path, run_id)
+    print(f"追記: {gdb_path}  RUN_ID={run_id}")
 
 
 # ── 公開 API ─────────────────────────────────────────────────────────────────

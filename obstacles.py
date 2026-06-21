@@ -24,6 +24,8 @@ from config import AVOIDANCE_MARGIN
 from geo import geo_to_local, GEO_WAYPOINTS
 from terrain import terrain_height_at
 
+GDB_PATH = r'C:\Users\tosei\work\flight-route\MD.gdb'
+
 
 # ── ヘルパー ────────────────────────────────────────────────────────────────────
 
@@ -164,28 +166,73 @@ class MovingObstacle:
 
 # ── 障害物定義（ここを編集する）────────────────────────────────────────────────
 
+_HARDCODED_SPHERES: list[SphereObstacle] = [
+    SphereObstacle(
+        pos=_geo_pos(34.88, 135.280, alt_agl=0.0),
+        radius=2000.0,
+        label='防空レーダーA',
+    ),
+    SphereObstacle(
+        pos=_geo_pos(35.261049, 135.147330, alt_agl=0.0),
+        radius=6000.0,
+        label='防空レーダーC',
+    ),
+    SphereObstacle(
+        pos=_geo_pos(35.35, 135.240, alt_agl=0.0),
+        radius=2500.0,
+        label='防空レーダーB',
+    ),
+]
+
+_HARDCODED_BOXES: list[BoxObstacle] = [
+    BoxObstacle(
+        pos=_geo_pos(35.12, 135.265, alt_agl=100.0),
+        half_extents=np.array([300.0, 150.0, 100.0]),
+        label='通信施設C',
+    ),
+]
+
+
+def _load_sphere_obstacles_from_gdb() -> list[SphereObstacle] | None:
+    """GDB の SPHERE_OBSTACLE フィーチャクラスから球状障害物を読み込む。
+
+    arcpy が使用できない場合や GDB が見つからない場合は None を返す。
+    """
+    try:
+        import arcpy  # noqa: PLC0415
+    except ImportError:
+        return None
+
+    import logging
+    logger = logging.getLogger(__name__)
+    fc = rf'{GDB_PATH}\SPHERE_OBSTACLE'
+    try:
+        result = []
+        with arcpy.da.SearchCursor(fc, ['NAME', 'RADIUS', 'SHAPE@XY', 'SHAPE@Z']) as cur:
+            for name, radius, (lon, lat), z in cur:
+                result.append(SphereObstacle(
+                    pos=_geo_pos(lat, lon, alt_agl=float(z or 0.0)),
+                    radius=float(radius),
+                    label=str(name or ''),
+                ))
+        logger.info("GDB SPHERE_OBSTACLE: %d 件読み込み (%s)", len(result), GDB_PATH)
+        return result
+    except Exception as exc:
+        logging.getLogger(__name__).warning("GDB 読み込み失敗: %s", exc)
+        return None
+
+
 def get_fixed_obstacles() -> list[FixedObstacle]:
-    """固定障害物リストを返す。球状・直方体を混在可能。"""
-    return [
-        # 1/3地点付近（t≈175s）: 経路のわずか東寄りに設置
-        SphereObstacle(
-            pos=_geo_pos(34.88, 135.280, alt_agl=0.0),
-            radius=2000.0,
-            label='防空レーダーA',
-        ),
-        # 1/2地点付近（t≈265s）: 経路直上の通信施設
-        BoxObstacle(
-            pos=_geo_pos(35.12, 135.265, alt_agl=100.0),
-            half_extents=np.array([300.0, 150.0, 100.0]),
-            label='通信施設C',
-        ),
-        # 2/3地点付近（t≈355s）: 西寄りに設置
-        SphereObstacle(
-            pos=_geo_pos(35.35, 135.240, alt_agl=0.0),
-            radius=2500.0,
-            label='防空レーダーB',
-        ),
-    ]
+    """固定障害物リストを返す。
+
+    球状障害物は GDB (SPHERE_OBSTACLE) から読み込む。
+    arcpy が使えない場合はハードコードにフォールバックする。
+    BoxObstacle はハードコードで管理する。
+    """
+    spheres = _load_sphere_obstacles_from_gdb()
+    if spheres is None:
+        spheres = _HARDCODED_SPHERES
+    return spheres + _HARDCODED_BOXES
 
 
 def get_moving_obstacles() -> list[MovingObstacle]:

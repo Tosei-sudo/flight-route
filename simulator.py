@@ -16,6 +16,7 @@ from nav import make_sensor
 from terrain import terrain_floor, terrain_height_at
 from geo import local_to_geo
 from obstacles import get_fixed_obstacles, get_moving_obstacles, FixedObstacle, MovingObstacle
+from atmosphere import air_density_ratio as _air_density_ratio
 
 
 @dataclass
@@ -401,7 +402,8 @@ class Simulator:
             else:
                 accel = np.zeros(3)
 
-            drag_accel  = -(DRAG_K * speed**2) * (vel / speed) if speed > 0.1 else np.zeros(3)
+            rho_ratio   = _air_density_ratio(pos[2])
+            drag_accel  = -(p.drag_k * rho_ratio * speed**2) * (vel / speed) if speed > 0.1 else np.zeros(3)
             total_accel = accel + drag_accel
 
             vel += total_accel * p.dt

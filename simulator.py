@@ -140,7 +140,8 @@ class Simulator:
         braking_vz = -float(np.sqrt(2.0 * p.max_accel * remaining))
         return float(max(braking_vz, -desired_speed * 0.15))
 
-    def _valley_dir(self, pos: np.ndarray, speed: float, to_wp_unit: np.ndarray) -> np.ndarray:
+    def _valley_dir(self, pos: np.ndarray, speed: float, to_wp_unit: np.ndarray,
+                    fixed_obs: list | None = None) -> np.ndarray:
         p = self.p
         best_dir, best_score = to_wp_unit.copy(), float('inf')
         for angle_deg in np.linspace(-p.low_valley_fan_deg, p.low_valley_fan_deg, p.low_valley_rays):
@@ -148,13 +149,22 @@ class Simulator:
             c, s = np.cos(a), np.sin(a)
             d = np.array([c*to_wp_unit[0] - s*to_wp_unit[1],
                           s*to_wp_unit[0] + c*to_wp_unit[1]])
-            max_h = 0.0
+            max_h    = 0.0
+            obs_hit  = False
             for t_scan in np.linspace(2.0, p.terrain_lookahead, 8):
-                pt   = np.array([pos[0]+d[0]*speed*t_scan, pos[1]+d[1]*speed*t_scan, 0.0])
+                pt   = np.array([pos[0]+d[0]*speed*t_scan,
+                                 pos[1]+d[1]*speed*t_scan, pos[2]])
                 lat, lon = local_to_geo(pt)
                 max_h = max(max_h, terrain_height_at(lat, lon))
+                if not obs_hit and fixed_obs:
+                    for obs in fixed_obs:
+                        if obs.dist_from_surface(pt) < obs.zone:
+                            obs_hit = True
+                            break
             deviation = abs(angle_deg) / p.low_valley_fan_deg
             score     = max_h + deviation * p.low_valley_cost
+            if obs_hit:
+                score += 1e8   # 障害物ゾーンを通る方向は最優先で除外
             if score < best_score:
                 best_score, best_dir = score, d.copy()
         return best_dir
@@ -399,7 +409,7 @@ class Simulator:
             else:  # CRUISE
                 if _profile == 'low':
                     target_z   = floor_z
-                    valley     = self._valley_dir(nav_pos, speed, horiz_dir)
+                    valley     = self._valley_dir(nav_pos, speed, horiz_dir, fixed_obs)
                     wp_pull    = float(np.clip(5000.0 / max(dist_horiz, 1.0), 0.30, 1.0))
                     blended    = wp_pull * horiz_dir + (1.0 - wp_pull) * valley
                     b_mag      = float(np.linalg.norm(blended))

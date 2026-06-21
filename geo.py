@@ -6,6 +6,7 @@ def geo_to_local(geo_wps: list) -> np.ndarray:
     """緯度経度リスト → ローカル ENU 直交座標 [m] に変換。
     先頭点が原点 (x=0, y=0)。x=東, y=北, z=高度(MSL)。
     callable エントリ（移動WP）はスキップする。"""
+    assert not callable(geo_wps[0]), "GEO_WAYPOINTS[0] must be a fixed tuple (lat, lon, alt)"
     lat0 = np.radians(geo_wps[0][0])
     lon0 = np.radians(geo_wps[0][1])
     pts = []

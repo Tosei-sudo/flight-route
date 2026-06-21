@@ -5,7 +5,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-from config import (MAX_ACCEL, MAX_SPEED, DRAG_K, DT,
+from config import (MAX_ACCEL, MAX_SPEED, DRAG_K, DT, GDB_OUTPUT_PATH,
                     INIT_AZIMUTH_DEG, INIT_ELEVATION_DEG, INIT_SPEED,
                     CAPTURE_R, HIT_RADIUS, COLLISION_LOOKAHEAD,
                     LAUNCH_CLIMB_RATIO, TERMINAL_GUIDANCE, POPUP_DIVE, ARH,
@@ -17,6 +17,7 @@ from terrain import terrain_floor, terrain_height_at
 from geo import local_to_geo
 from obstacles import get_fixed_obstacles, get_moving_obstacles, FixedObstacle, MovingObstacle
 from atmosphere import air_density_ratio as _air_density_ratio
+from wind import get_wind_field as _get_wind_field
 
 
 @dataclass
@@ -195,6 +196,7 @@ class Simulator:
               hit_ground, profile_used
         """
         p = self.p
+        _wind_field = _get_wind_field(GDB_OUTPUT_PATH)
         final_is_moving = callable(waypoints[-1])
         _profile = profile if profile is not None else p.flight_profile
         if _profile == 'auto':
@@ -402,8 +404,14 @@ class Simulator:
             else:
                 accel = np.zeros(3)
 
-            rho_ratio   = _air_density_ratio(pos[2])
-            drag_accel  = -(p.drag_k * rho_ratio * speed**2) * (vel / speed) if speed > 0.1 else np.zeros(3)
+            # 対気速度（風に乗った気塊に対する相対速度）で抗力を計算
+            lat_p, lon_p = local_to_geo(pos)
+            wind        = _wind_field.wind_enu(lat_p, lon_p, float(pos[2]))
+            vel_air     = vel - wind
+            speed_air   = float(np.linalg.norm(vel_air))
+            rho_ratio   = _air_density_ratio(float(pos[2]))
+            drag_accel  = (-(p.drag_k * rho_ratio * speed_air**2)
+                           * (vel_air / speed_air)) if speed_air > 0.1 else np.zeros(3)
             total_accel = accel + drag_accel
 
             vel += total_accel * p.dt

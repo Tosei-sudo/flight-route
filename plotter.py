@@ -7,7 +7,7 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 from config import MAX_ACCEL, MAX_SPEED, PLOT_3D_ONLY, TERRAIN_CLEARANCE, FLIGHT_PROFILE
 from terrain import terrain_height_at
 from geo import local_to_geo
-from obstacles import get_fixed_obstacles, get_moving_obstacles, SphereObstacle, BoxObstacle
+from obstacles import get_fixed_obstacles, get_moving_obstacles, SphereObstacle, BoxObstacle, AreaObstacle
 
 # 日本語フォント設定（Windows: Yu Gothic / Meiryo / MS Gothic）
 for _font in ['Yu Gothic', 'Meiryo', 'MS Gothic', 'IPAexGothic']:
@@ -31,8 +31,12 @@ def plot(hist: dict, waypoints: np.ndarray, path: str = 'flight_route.png', show
     # シミュレータと同じ条件で「関係した障害物」だけに絞る
     all_fixed  = get_fixed_obstacles()
     all_moving = get_moving_obstacles()
+    def _relevant_fixed(o):
+        return any(o.dist_from_surface(p) < o.zone for p in pos)
     fixed_obs  = [o for o in all_fixed
-                  if any(o.dist_from_surface(p) < o.zone for p in pos)]
+                  if not isinstance(o, AreaObstacle) and _relevant_fixed(o)]
+    area_obs   = [o for o in all_fixed
+                  if     isinstance(o, AreaObstacle) and _relevant_fixed(o)]
     moving_obs = [o for o in all_moving
                   if any(float(np.linalg.norm(p - o.pos_at(float(t)))) < o.zone
                          for p, t in zip(pos, times))]
@@ -101,6 +105,26 @@ def plot(hist: dict, waypoints: np.ndarray, path: str = 'flight_route.png', show
             for i, j in edges:
                 ax1.plot(*zip(corners[i], corners[j]),
                          color='crimson', alpha=0.5, lw=1.0)
+
+    # エリア障害物（3D: 天井ポリゴン + 縦辺ワイヤーフレーム）
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: PLC0415
+    _AREA_COLOR = 'mediumpurple'
+    for obs in area_obs:
+        v = obs.vertices_enu
+        h = obs.height_msl
+        # 天井面
+        ceiling = [(v[i, 0], v[i, 1], h) for i in range(len(v))]
+        poly3d  = Poly3DCollection([ceiling], alpha=0.15,
+                                   facecolor=_AREA_COLOR, edgecolor=_AREA_COLOR, lw=0.8)
+        ax1.add_collection3d(poly3d)
+        # 縦辺（頂点ごと）
+        for i in range(len(v)):
+            ax1.plot([v[i, 0], v[i, 0]], [v[i, 1], v[i, 1]], [0, h],
+                     color=_AREA_COLOR, alpha=0.35, lw=0.6)
+        # ラベル（重心上）
+        cx, cy = v[:, 0].mean(), v[:, 1].mean()
+        ax1.text(cx, cy, h + 200, f'{obs.label}\n({h:.0f}m MSL)',
+                 color=_AREA_COLOR, fontsize=7, ha='center')
 
     # 移動体（3D: 橙のマーカー + 軌跡矢印）
     for obs in moving_obs:
@@ -230,6 +254,18 @@ def plot(hist: dict, waypoints: np.ndarray, path: str = 'flight_route.png', show
                     color='crimson', alpha=0.35, fill=True, zorder=3))
                 ax6.text(obs.pos[0], obs.pos[1] + zone_r * 0.1,
                          obs.label, color='crimson', fontsize=7)
+
+        for obs in area_obs:
+            v = obs.vertices_enu
+            # ポリゴン塗りつぶし（薄紫）
+            ax6.add_patch(mpatches.Polygon(
+                v, closed=True, facecolor=_AREA_COLOR, alpha=0.18, zorder=2))
+            ax6.plot(np.append(v[:, 0], v[0, 0]),
+                     np.append(v[:, 1], v[0, 1]),
+                     color=_AREA_COLOR, lw=1.2, zorder=3)
+            cx, cy = v[:, 0].mean(), v[:, 1].mean()
+            ax6.text(cx, cy, f'{obs.label}\n{obs.height_msl:.0f}m MSL',
+                     color=_AREA_COLOR, fontsize=7, ha='center', va='center', zorder=4)
 
         for obs in moving_obs:
             p0 = obs.pos_init

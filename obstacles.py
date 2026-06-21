@@ -4,7 +4,8 @@
 クラス階層:
   FixedObstacle (ABC)
   ├── SphereObstacle  … レーダーサイト・禁止空域など（球状）
-  └── BoxObstacle     … 建物・施設など（軸平行直方体 AABB）
+  ├── BoxObstacle     … 建物・施設など（軸平行直方体 AABB）
+  └── AreaObstacle    … 多角形エリア障害物（禁止空域・侵入禁止区域など）
   MovingObstacle      … 航空機・艦船など移動体
 
 ユーザー編集箇所:
@@ -138,6 +139,85 @@ class BoxObstacle(FixedObstacle):
         return normal
 
 
+# ── エリア障害物（ポリゴン）────────────────────────────────────────────────────
+
+def _poly_signed_dist_2d(p: np.ndarray, verts: np.ndarray) -> tuple[float, np.ndarray]:
+    """2D ポリゴン外縁への符号付き距離と外向き方向ベクトルを返す。
+
+    Returns
+    -------
+    dist    : 正値=外部（外縁まで）、負値=内部（-外縁まで）
+    outward : 外部なら polygon から pos へ向かう単位ベクトル、
+              内部なら pos から最近外縁へ向かう単位ベクトル（脱出方向）
+    """
+    n = len(verts)
+    min_dist = float('inf')
+    outward  = np.array([1.0, 0.0])
+
+    for i in range(n):
+        a  = verts[i]
+        b  = verts[(i + 1) % n]
+        ab = b - a
+        denom = float(np.dot(ab, ab))
+        if denom < 1e-12:
+            continue
+        t       = float(np.clip(np.dot(p - a, ab) / denom, 0.0, 1.0))
+        closest = a + t * ab
+        diff    = p - closest
+        dist    = float(np.linalg.norm(diff))
+        if dist < min_dist:
+            min_dist = dist
+            outward  = diff / (dist + 1e-12)
+
+    # ray casting: 内外判定
+    inside = False
+    px, py = float(p[0]), float(p[1])
+    j = n - 1
+    for i in range(n):
+        xi, yi = float(verts[i, 0]), float(verts[i, 1])
+        xj, yj = float(verts[j, 0]), float(verts[j, 1])
+        if (yi > py) != (yj > py):
+            if px < xi + (py - yi) * (xj - xi) / (yj - yi):
+                inside = not inside
+        j = i
+
+    if inside:
+        return -min_dist, -outward  # 脱出方向（最近縁へ向かう）
+    return min_dist, outward
+
+
+@dataclass
+class AreaObstacle(FixedObstacle):
+    """多角形エリア障害物（禁止空域・侵入禁止区域など）。
+
+    ポリゴン内かつ height_msl 以下の高度を飛行する場合に回避する。
+
+    Args:
+        vertices_enu : ポリゴン外周頂点の ENU XY 座標 (N, 2) [m]
+        height_msl   : 回避天井高度 MSL [m]（これ以上は制約なし）
+        label        : 表示ラベル
+        zone_m       : 回避開始距離 [m]（ポリゴン外縁からのバッファ）
+    """
+    vertices_enu: np.ndarray
+    height_msl:   float
+    label:        str   = ''
+    zone_m:       float = 2000.0
+
+    @property
+    def zone(self) -> float:
+        return self.zone_m
+
+    def dist_from_surface(self, pos: np.ndarray) -> float:
+        if pos[2] >= self.height_msl:
+            return float('inf')
+        d, _ = _poly_signed_dist_2d(pos[:2], self.vertices_enu)
+        return d
+
+    def repulsion_dir(self, pos: np.ndarray) -> np.ndarray:
+        _, outward = _poly_signed_dist_2d(pos[:2], self.vertices_enu)
+        return np.array([outward[0], outward[1], 0.0])
+
+
 # ── 移動体障害物 ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -222,17 +302,59 @@ def _load_sphere_obstacles_from_gdb() -> list[SphereObstacle] | None:
         return None
 
 
+def _load_area_obstacles_from_gdb() -> list[AreaObstacle] | None:
+    """GDB の AREA_OBSTACLE フィーチャクラスからエリア障害物を読み込む。
+
+    HEIGHT フィールドを AGL 高さとして扱い、ポリゴン重心の地形高度を加算して
+    height_msl (MSL) に変換する。arcpy が使えない場合は None を返す。
+    """
+    try:
+        import arcpy  # noqa: PLC0415
+    except ImportError:
+        return None
+
+    import logging
+    from geo import geo_to_local_pt  # noqa: PLC0415
+    logger = logging.getLogger(__name__)
+    fc = rf'{GDB_PATH}\AREA_OBSTACLE'
+    try:
+        result = []
+        with arcpy.da.SearchCursor(
+                fc, ['NAME', 'HEIGHT', 'SHAPE@', 'SHAPE@XY']) as cur:
+            for name, height_agl, shape, (cx, cy) in cur:
+                # 重心地点(cx=lon, cy=lat)の地形高度を取得して AGL → MSL 変換
+                terrain_h  = terrain_height_at(cy, cx)
+                height_msl = terrain_h + float(height_agl or 0.0)
+
+                # ポリゴン外周を ENU XY に変換（終点の重複を除く）
+                ring = shape.getPart(0)
+                verts_enu = np.array([
+                    geo_to_local_pt(pt.Y, pt.X, 0.0)[:2]
+                    for pt in ring if pt is not None
+                ])
+
+                result.append(AreaObstacle(
+                    vertices_enu=verts_enu,
+                    height_msl=height_msl,
+                    label=str(name or ''),
+                ))
+        logger.info("GDB AREA_OBSTACLE: %d 件読み込み (%s)", len(result), GDB_PATH)
+        return result
+    except Exception as exc:
+        logging.getLogger(__name__).warning("AREA_OBSTACLE 読み込み失敗: %s", exc)
+        return None
+
+
 def get_fixed_obstacles() -> list[FixedObstacle]:
     """固定障害物リストを返す。
 
-    球状障害物は GDB (SPHERE_OBSTACLE) から読み込む。
+    球状障害物・エリア障害物は GDB から読み込む。
     arcpy が使えない場合はハードコードにフォールバックする。
     BoxObstacle はハードコードで管理する。
     """
-    spheres = _load_sphere_obstacles_from_gdb()
-    if spheres is None:
-        spheres = _HARDCODED_SPHERES
-    return spheres + _HARDCODED_BOXES
+    spheres = _load_sphere_obstacles_from_gdb() or _HARDCODED_SPHERES
+    areas   = _load_area_obstacles_from_gdb()   or []
+    return spheres + _HARDCODED_BOXES + areas
 
 
 def get_moving_obstacles() -> list[MovingObstacle]:

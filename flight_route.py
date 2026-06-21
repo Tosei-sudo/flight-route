@@ -52,7 +52,7 @@ def _setup_logging(log_path: str) -> None:
     root.addHandler(ch)
 from geo import GEO_WAYPOINTS, local_to_geo, geo_to_local_pt
 from terrain import terrain_height_at
-from simulator import simulate, turning_radius
+from simulator import Simulator, SimParams
 from exporter import save_csv
 from geojson_export import save_geojson
 from plotter import plot
@@ -83,11 +83,94 @@ def _make_wp_resolvers() -> list:
     return resolvers
 
 
+def _print_result(label: str, hist: dict) -> None:
+    total_dist = float(np.sum(np.linalg.norm(np.diff(hist['pos'], axis=0), axis=1)))
+    total_time = float(hist['time'][-1])
+    avg_speed  = total_dist / total_time if total_time > 0 else 0.0
+    status     = "地面衝突" if hist['hit_ground'] else "正常終了"
+    logger.info("─── 結果 [%s] ──────────────────────────", label)
+    logger.info("  終了状態    : %s", status)
+    logger.info("  総飛翔距離  : %.2f km", total_dist / 1000)
+    logger.info("  飛翔時間    : %.1f s (%.1f min)", total_time, total_time / 60)
+    logger.info("  平均速度    : %.1f m/s", avg_speed)
+    logger.info("  最高到達速度: %.1f m/s", hist['speed'].max())
+    logger.info("──────────────────────────────────────────")
+
+
+def _run_single(wp_resolvers: list, args) -> None:
+    logger.info("シミュレーション中...")
+    sim = Simulator()
+    try:
+        hist = sim.run(wp_resolvers, profile=args.profile)
+    except Exception:
+        logger.exception("シミュレーション中に例外が発生しました")
+        raise
+
+    _print_result("Instance 0", hist)
+
+    t_end        = float(hist['time'][-1])
+    WP_MSL_FINAL = np.array([r(t_end) if callable(r) else r for r in wp_resolvers])
+
+    if SAVE_CSV:
+        save_csv(hist, CSV_PATH)
+        logger.info("保存: %s", CSV_PATH)
+    if SAVE_GEOJSON:
+        save_geojson(hist, WP_MSL_FINAL, GEOJSON_PATH)
+
+    plot(hist, WP_MSL_FINAL, PLOT_PATH, show=not args.no_plot)
+    logger.info("保存: %s", PLOT_PATH)
+    logger.info("ログ: %s", os.path.abspath(LOG_PATH))
+
+
+def _run_compare(wp_resolvers: list, args) -> None:
+    """2インスタンスを並列実行して結果を比較する。"""
+    import time as _time
+
+    sim0 = Simulator()
+    sim1 = Simulator(max_speed=250.0)
+
+    configs = [
+        ("Instance 0", "max_speed=272 (default)", sim0),
+        ("Instance 1", "max_speed=250",            sim1),
+    ]
+    logger.info("=== 並列比較実行 (%d インスタンス) ===", len(configs))
+    for label, desc, _ in configs:
+        logger.info("  [%s] %s", label, desc)
+    logger.info("")
+
+    t0 = _time.perf_counter()
+    results = Simulator.run_parallel(
+        [(wp_resolvers, sim) for _, _, sim in configs]
+    )
+    elapsed = _time.perf_counter() - t0
+    logger.info("並列実行時間: %.2f s", elapsed)
+    logger.info("")
+
+    for (label, desc, _), hist in zip(configs, results):
+        _print_result(f"{label} / {desc}", hist)
+
+    hist0  = results[0]
+    t_end  = float(hist0['time'][-1])
+    WP_MSL = np.array([r(t_end) if callable(r) else r for r in wp_resolvers])
+
+    if SAVE_CSV:
+        save_csv(hist0, CSV_PATH)
+        logger.info("保存(Instance 0): %s", CSV_PATH)
+    if SAVE_GEOJSON:
+        save_geojson(hist0, WP_MSL, GEOJSON_PATH)
+
+    plot(hist0, WP_MSL, PLOT_PATH, show=not args.no_plot)
+    logger.info("保存: %s", PLOT_PATH)
+    logger.info("ログ: %s", os.path.abspath(LOG_PATH))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--no-plot', action='store_true', help='プロット画面を表示しない（PNG保存は継続）')
     parser.add_argument('--profile', default=None, choices=['standard', 'low', 'auto'],
                         help='飛行プロファイル: standard=直線巡航 / low=地形密着低空飛行 / auto=目標種別で自動選択')
+    parser.add_argument('--compare', action='store_true',
+                        help='2インスタンスを並列実行して結果を比較する（お試し用）')
     args = parser.parse_args()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -98,7 +181,7 @@ if __name__ == '__main__':
     logger.info("  最大加速度  : %s m/s^2", MAX_ACCEL)
     logger.info("  最高速度    : %s m/s", MAX_SPEED)
     logger.info("  重力加速度  : %s m/s^2", G)
-    _tr = turning_radius(MAX_SPEED)
+    _tr = Simulator().turning_radius(MAX_SPEED)
     logger.info("  最小旋回半径: %s m (%.1f km)", f"{_tr:,.0f}", _tr / 1000)
     logger.info("")
 
@@ -121,39 +204,7 @@ if __name__ == '__main__':
             logger.info("  %s: (%.6f°, %.6f°)  AGL %.0fm  地形 %.0fm  → MSL %.0fm",
                         lbl, lat, lon, alt_agl, terrain_h, alt_agl + terrain_h)
     logger.info("")
-    logger.info("シミュレーション中...")
-    try:
-        hist = simulate(WP_RESOLVERS, profile=args.profile)
-    except Exception:
-        logger.exception("シミュレーション中に例外が発生しました")
-        raise
-
-    total_dist = float(np.sum(np.linalg.norm(np.diff(hist['pos'], axis=0), axis=1)))
-    total_time = float(hist['time'][-1])
-    avg_speed  = total_dist / total_time if total_time > 0 else 0.0
-
-    status = "地面衝突" if hist['hit_ground'] else "正常終了"
-
-    logger.info("")
-    logger.info("─── 結果 ───────────────────────────────")
-    logger.info("  終了状態    : %s", status)
-    logger.info("  総飛翔距離  : %.2f km", total_dist / 1000)
-    logger.info("  飛翔時間    : %.1f s (%.1f min)", total_time, total_time / 60)
-    logger.info("  平均速度    : %.1f m/s", avg_speed)
-    logger.info("  最高到達速度: %.1f m/s", hist['speed'].max())
-    logger.info("─────────────────────────────────────────")
-
-    # プロット・エクスポート用: callable WPを最終時刻で解決した ndarray
-    t_end = total_time
-    WP_MSL_FINAL = np.array([r(t_end) if callable(r) else r for r in WP_RESOLVERS])
-
-    if SAVE_CSV:
-        save_csv(hist, CSV_PATH)
-        logger.info("保存: %s", CSV_PATH)
-
-    if SAVE_GEOJSON:
-        save_geojson(hist, WP_MSL_FINAL, GEOJSON_PATH)
-
-    plot(hist, WP_MSL_FINAL, PLOT_PATH, show=not args.no_plot)
-    logger.info("保存: %s", PLOT_PATH)
-    logger.info("ログ: %s", os.path.abspath(LOG_PATH))
+    if args.compare:
+        _run_compare(WP_RESOLVERS, args)
+    else:
+        _run_single(WP_RESOLVERS, args)

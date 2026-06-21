@@ -129,7 +129,7 @@ class Simulator:
         climb_vz   = p.max_speed * 0.5
         climb_vh   = float(np.sqrt(max(p.max_speed**2 - climb_vz**2, 0.0)))
         climb_time = p.popup_dive.popup_height / climb_vz
-        needed     = climb_vh * climb_time + dive_horiz * 2.0
+        needed     = climb_vh * climb_time + dive_horiz
         return round((needed / p.max_speed + climb_time) * 1.3, 1)
 
     def _vz_command(self, alt_error: float, current_vz: float, desired_speed: float) -> float:

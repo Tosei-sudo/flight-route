@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-Content 'C:\\\\Users\\\\tosei\\\\work\\\\flight-route\\\\telemetry.csv' | Select-Object -Skip 1 | ConvertFrom-Csv -Header time_s,x_m,y_m,z_m,vx,vy,vz,speed,ax,ay,az,accel_mag,el,az2 | Select-Object time_s, speed, accel_mag | Where-Object { [double]$_.speed -gt 240 } | Select-Object -First 40 | Format-Table -AutoSize)",
+      "PowerShell(cd C:\\\\Users\\\\tosei\\\\work\\\\flight-route; $env:MPLBACKEND=\"Agg\"; py _test_lookahead.py 2>&1 | Select-String -NotMatch \"^DEM|UserWarning|plt.show|CategoryInfo|FullyQualifiedErrorId|NativeCommandError|RemoteException|高度範囲\")",
+      "PowerShell(cd C:\\\\Users\\\\tosei\\\\work\\\\flight-route; $env:MPLBACKEND=\"Agg\"; py flight_route.py 2>&1)",
+      "Bash(python3 flight_route.py)",
+      "Bash(/c/Users/tosei/AppData/Local/Python/pythoncore-3.14-64/python.exe flight_route.py)"
+    ]
+  }
+}

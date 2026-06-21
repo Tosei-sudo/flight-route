@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//mnt/c/Users/tosei/work/**)",
+      "Bash(python flight_route.py)",
+      "PowerShell(python --version; python3 --version; where python; where python3)",
+      "PowerShell(& 'C:\\\\Users\\\\tosei\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe' --version)",
+      "PowerShell(& 'C:\\\\Users\\\\tosei\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe' -c \"import numpy, matplotlib; print\\('OK'\\)\")",
+      "PowerShell(& 'C:\\\\Users\\\\tosei\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe' -m pip install numpy matplotlib 2>&1 | Select-Object -Last 10)",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\tosei\\\\work\\\\flight-route'; $env:MPLBACKEND='Agg'; & 'C:\\\\Users\\\\tosei\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe' flight_route.py 2>&1 | Where-Object { $_ -match 'WP|結果|総|飛翔|平均|保存|===|Error|Traceback' })",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\tosei\\\\work\\\\flight-route'; $env:MPLBACKEND='Agg'; & 'C:\\\\Users\\\\tosei\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe' flight_route.py 2>&1 | Where-Object { $_ -match '保存|===|Error|Traceback|WP|結果' })",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\tosei\\\\work\\\\flight-route'; $env:MPLBACKEND='Agg'; & 'C:\\\\Users\\\\tosei\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe' flight_route.py 2>&1 | Where-Object { $_ -match 'WP|結果|総|飛翔|平均|最高|保存|===|Error|Traceback' })",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\tosei\\\\work\\\\flight-route'; $env:MPLBACKEND='Agg'; & 'C:\\\\Users\\\\tosei\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python.exe' flight_route.py 2>&1 | Where-Object { $_ -match 'WP|結果|総|飛翔|平均|最高|保存|===|ウェイポイント|出発|経由|目的|旋回|Error|Traceback' })",
+      "Bash(python -c ' *)",
+      "Bash(python3 -c ' *)",
+      "Bash(py flight_route.py)",
+      "Bash(wait %1)",
+      "PowerShell(cd C:\\\\Users\\\\tosei\\\\work\\\\flight-route; $env:MPLBACKEND=\"Agg\"; py flight_route.py 2>&1)",
+      "Bash(/c/Users/tosei/AppData/Local/Python/pythoncore-3.14-64/python.exe flight_route.py --no-plot)"
+    ]
+  }
+}

@@ -82,9 +82,15 @@ def _save_gdb_arcpy(hist: dict, waypoints_msl: np.ndarray, gdb_path: str) -> Non
     gdb_name = os.path.basename(gdb_path)
     os.makedirs(folder, exist_ok=True)
 
-    if arcpy.Exists(gdb_path):
-        arcpy.management.Delete(gdb_path)
-    arcpy.management.CreateFileGDB(folder, gdb_name)
+    # GDB がなければ新規作成。既存の場合は出力 FC だけ削除して再作成する
+    # （入力 FC: SPHERE_OBSTACLE / AREA_OBSTACLE は温存）
+    if not arcpy.Exists(gdb_path):
+        arcpy.management.CreateFileGDB(folder, gdb_name)
+    for fc_name in ('FLIGHT_TRAJECTORY', 'WAYPOINTS',
+                    'FIXED_OBSTACLES', 'MOVING_OBS_TRACKS'):
+        fc_path = f'{gdb_path}\\{fc_name}'
+        if arcpy.Exists(fc_path):
+            arcpy.management.Delete(fc_path)
 
     fixed_obs  = get_fixed_obstacles()
     moving_obs = get_moving_obstacles()

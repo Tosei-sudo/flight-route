@@ -30,7 +30,7 @@ DRAG_K = 5e-5   # m⁻¹
 # 'standard': 直線巡航しつつ地形回避（WP高度 or 地形クリアランスの高い方を維持）
 # 'low'     : 地形密着低空飛行（谷を探して遠回りしてでも低い経路を選択）
 # 'auto'    : 最終WPが移動目標(callable)→ standard、固定目標(tuple)→ low を自動選択
-FLIGHT_PROFILE = 'standard'
+FLIGHT_PROFILE = 'low'
 
 # low プロファイル専用: 谷探索パラメータ
 LOW_VALLEY_FAN_DEG = 60.0   # 谷スキャンの角度幅 ±度（大きいほど大回りを許容）

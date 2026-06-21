@@ -16,7 +16,11 @@
       "Bash(py flight_route.py)",
       "Bash(wait %1)",
       "PowerShell(cd C:\\\\Users\\\\tosei\\\\work\\\\flight-route; $env:MPLBACKEND=\"Agg\"; py flight_route.py 2>&1)",
-      "Bash(/c/Users/tosei/AppData/Local/Python/pythoncore-3.14-64/python.exe flight_route.py --no-plot)"
+      "Bash(/c/Users/tosei/AppData/Local/Python/pythoncore-3.14-64/python.exe flight_route.py --no-plot)",
+      "Bash(/c/Users/tosei/AppData/Local/Python/pythoncore-3.14-64/python.exe *)",
+      "Bash(python *)",
+      "Bash(C:/Program Files/ArcGIS/Pro/bin/Python/envs/arcgispro-py3/python.exe *)",
+      "Bash('C:/Program Files/ArcGIS/Pro/bin/Python/envs/arcgispro-py3/python.exe' -c ' *)"
     ]
   }
 }

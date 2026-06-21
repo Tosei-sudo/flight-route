@@ -3,3 +3,5 @@
 /__pycache__
 /DEM/
 /result/
+f-route-py312
+*.sr.lock

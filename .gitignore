@@ -1,3 +1,5 @@
 /.vscode
 /flight-env
 /__pycache__
+/DEM/
+/result/

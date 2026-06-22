@@ -53,15 +53,13 @@ class SimParams:
     glide_steer_limit:  float          = GLIDE_STEER_LIMIT
 
 
-# フライトフェーズ定数
 PHASE_LAUNCH   = 'launch'
 PHASE_CRUISE   = 'cruise'
 PHASE_TERMINAL = 'terminal'
 
-# 推進状態定数
-PROP_THRUST    = 'thrust'     # スラスト中（燃料あり）
-PROP_GLIDE     = 'glide'      # 滑空中（燃料切れ、バッテリーあり）
-PROP_BALLISTIC = 'ballistic'  # 弾道（燃料・バッテリー共に枯渇）
+PROP_THRUST    = 'thrust'
+PROP_GLIDE     = 'glide'
+PROP_BALLISTIC = 'ballistic'
 
 
 def _wp_pos(entry, t: float) -> np.ndarray:
@@ -83,40 +81,11 @@ def _intercept_pos(entry, t_now: float, from_pos_2d: np.ndarray, horiz_speed: fl
 
 
 class Simulator:
-    """1回のシミュレーションを実行するクラス。
-
-    インスタンスごとに独立した SimParams を持つため、
-    異なるパラメータで複数インスタンスを同時に実行できる。
-
-    Examples
-    --------
-    # シングル実行（従来通り）
-    result = Simulator().run(waypoints)
-
-    # パラメータを変えた比較
-    s1 = Simulator(max_speed=250.0)
-    s2 = Simulator(max_speed=300.0)
-    r1 = s1.run(waypoints)
-    r2 = s2.run(waypoints)
-
-    # 並列実行
-    results = Simulator.run_parallel([
-        (waypoints_a,),
-        (waypoints_b, Simulator(max_accel=60.0)),
-    ])
-    """
+    """1回のシミュレーションを実行するクラス。"""
 
     def __init__(self, params: SimParams | None = None, **overrides):
-        """
-        Parameters
-        ----------
-        params   : SimParams インスタンス（省略時はデフォルト値）
-        **overrides : SimParams フィールドを直接上書き。例: max_speed=250.0
-        """
         base = params if params is not None else SimParams()
         self.p = replace(base, **overrides) if overrides else base
-
-    # ── ヘルパーメソッド ────────────────────────────────────────────────────────
 
     def turning_radius(self, speed: float) -> float:
         return speed ** 2 / self.p.max_accel if speed > 0.1 else 0.0
@@ -129,7 +98,7 @@ class Simulator:
         climb_vz   = p.max_speed * 0.5
         climb_vh   = float(np.sqrt(max(p.max_speed**2 - climb_vz**2, 0.0)))
         climb_time = p.popup_dive.popup_height / climb_vz
-        needed     = climb_vh * climb_time + dive_horiz * 2.0
+        needed     = climb_vh * climb_time + dive_horiz
         return round((needed / p.max_speed + climb_time) * 1.3, 1)
 
     def _vz_command(self, alt_error: float, current_vz: float, desired_speed: float) -> float:
@@ -164,7 +133,7 @@ class Simulator:
             deviation = abs(angle_deg) / p.low_valley_fan_deg
             score     = max_h + deviation * p.low_valley_cost
             if obs_hit:
-                score += 1e8   # 障害物ゾーンを通る方向は最優先で除外
+                score += 1e8
             if score < best_score:
                 best_score, best_dir = score, d.copy()
         return best_dir
@@ -187,11 +156,11 @@ class Simulator:
             lat_m  = float(np.linalg.norm(lat_v))
             if lat_m > 1e-9:
                 repulse[:] += (lat_v / lat_m) * w * 2.0
-            repulse[:] += heading_h * max(-dot, 0.0) * w * 0.3
+            repulse[:] -= heading_h * max(-dot, 0.0) * w * 0.3
 
         for obs in fixed_obs:
             dist = obs.dist_from_surface(pos)
-            if 0.0 < dist < obs.zone:
+            if dist < obs.zone:
                 _add(obs.repulsion_dir(pos), dist, obs.zone)
 
         for obs in moving_obs:
@@ -207,16 +176,7 @@ class Simulator:
         new_spd = float(np.linalg.norm(new_vel))
         return new_vel * (desired_speed / new_spd) if new_spd > 1e-9 else desired_vel
 
-    # ── メイン ─────────────────────────────────────────────────────────────────
-
     def run(self, waypoints: list, profile: str | None = None) -> dict:
-        """ウェイポイント列に沿った飛翔軌道をシミュレーションする。
-
-        Returns
-        -------
-        dict: pos, vel, accel, time, speed, elevation, azimuth, phase,
-              hit_ground, profile_used
-        """
         p = self.p
         _wind_field = _get_wind_field(GDB_OUTPUT_PATH)
         final_is_moving = callable(waypoints[-1])
@@ -268,7 +228,6 @@ class Simulator:
         dive_start        = None
         arh_debug_step    = 0
 
-        # 燃料・バッテリー状態
         fuel       = p.fuel_capacity
         battery    = p.battery_capacity
         propulsion = PROP_THRUST
@@ -313,7 +272,7 @@ class Simulator:
                 desired_speed = p.max_speed
 
             floor_z    = terrain_floor(nav_pos, vel, speed)
-            time_to_go = dist_horiz / speed if speed > 1.0 else float('inf')
+            time_to_go = dist_3d / speed if speed > 1.0 else float('inf')
 
             if phase == PHASE_LAUNCH and nav_pos[2] >= floor_z:
                 phase = PHASE_CRUISE
@@ -342,7 +301,6 @@ class Simulator:
                                 "高度 %.0fm MSL  N=%.1f",
                                 t, time_to_go, dist_horiz, nav_pos[2], p.arh.nav_constant)
 
-            # ── ガイダンス ──────────────────────────────────────────────────────
             horiz_dir = to_wp_orig[:2] / dist_horiz
 
             if phase == PHASE_LAUNCH:
@@ -425,7 +383,6 @@ class Simulator:
                 desired_vel = self._avoidance_steer(nav_pos, desired_vel, desired_speed,
                                                     t, fixed_obs, moving_obs)
 
-            # ── 加速度・物理積分 ────────────────────────────────────────────────
             dv     = desired_vel - vel
             dv_mag = float(np.linalg.norm(dv))
             if dv_mag > p.max_accel * p.dt:
@@ -435,7 +392,6 @@ class Simulator:
             else:
                 accel = np.zeros(3)
 
-            # ── 推進状態・燃料／バッテリー管理 ────────────────────────────────────
             if propulsion == PROP_THRUST:
                 thrust_mag = float(np.linalg.norm(accel))
                 fuel -= p.fuel_burn_rate * thrust_mag * p.dt
@@ -446,7 +402,6 @@ class Simulator:
                                 t, battery / p.battery_capacity * 100)
 
             elif propulsion == PROP_GLIDE:
-                # 操舵加速度を速度依存で制限（速度低下 → 翼効果低下）
                 steer_lim = (p.max_accel * p.glide_steer_limit
                              * min(1.0, speed / max(p.max_speed * 0.3, 1.0)))
                 accel_mag = float(np.linalg.norm(accel))
@@ -458,14 +413,13 @@ class Simulator:
                     propulsion = PROP_BALLISTIC
                     logger.info("t=%6.1f s  [バッテリー切れ] 弾道飛行へ", t)
 
-            else:  # PROP_BALLISTIC
+            else:
                 accel = np.zeros(3)
 
             prop_log.append(propulsion)
             fuel_log.append(fuel)
             batt_log.append(battery)
 
-            # 対気速度（風に乗った気塊に対する相対速度）で抗力を計算
             lat_p, lon_p = local_to_geo(pos)
             wind        = _wind_field.wind_enu(lat_p, lon_p, float(pos[2]))
             vel_air     = vel - wind
@@ -546,32 +500,8 @@ class Simulator:
             'profile_used': _profile,
         }
 
-    # ── 並列実行 ────────────────────────────────────────────────────────────────
-
     @staticmethod
     def run_parallel(runs: list, max_workers: int | None = None) -> list[dict]:
-        """複数のシミュレーションを並列実行する。
-
-        Parameters
-        ----------
-        runs : list of (waypoints,) or (waypoints, Simulator)
-            各エントリは waypoints のみ、または (waypoints, Simulator) のタプル。
-            Simulator を省略するとデフォルトパラメータで実行。
-        max_workers : int | None
-            スレッド数。None で CPU コア数に自動設定。
-
-        Returns
-        -------
-        list[dict]
-            入力順に対応した結果リスト。
-
-        Examples
-        --------
-        results = Simulator.run_parallel([
-            (wps_a,),
-            (wps_b, Simulator(max_speed=250.0)),
-        ])
-        """
         def _run(item):
             if isinstance(item, (list, np.ndarray)):
                 return Simulator().run(item)
@@ -584,13 +514,9 @@ class Simulator:
             return [f.result() for f in futures]
 
 
-# ── 後方互換ラッパー ──────────────────────────────────────────────────────────
-
 def simulate(waypoints: list, profile: str | None = None) -> dict:
-    """後方互換: Simulator().run() と同じ。"""
     return Simulator().run(waypoints, profile)
 
 
 def turning_radius(speed: float) -> float:
-    """後方互換: Simulator().turning_radius() と同じ。"""
     return Simulator().turning_radius(speed)

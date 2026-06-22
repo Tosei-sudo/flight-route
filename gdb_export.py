@@ -230,6 +230,6 @@ def save_gdb(hist: dict, waypoints_msl: np.ndarray,
 
 def _fallback(hist, waypoints_msl, gdb_path, reason):
     from geojson_export import save_geojson
-    fallback_path = os.path.splitext(gdb_path)[0] + '.geojson'
+    from config import GEOJSON_PATH
     logger.warning("GDB 書き出しをスキップ → GeoJSON にフォールバック (%s)", reason)
-    save_geojson(hist, waypoints_msl, fallback_path)
+    save_geojson(hist, waypoints_msl, GEOJSON_PATH)

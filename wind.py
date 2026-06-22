@@ -20,6 +20,7 @@ import re
 import shutil
 import logging
 import tempfile
+import threading
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -150,13 +151,16 @@ class WindField:
 # ── シングルトン ──────────────────────────────────────────────────────────────
 
 _instance: WindField | None = None
+_lock = threading.Lock()
 
 
 def get_wind_field(gdb_path: str) -> WindField:
     """WindField のシングルトンを返す（初回のみロード）。"""
     global _instance
     if _instance is None:
-        _instance = WindField(gdb_path)
+        with _lock:
+            if _instance is None:
+                _instance = WindField(gdb_path)
     return _instance
 
 

@@ -179,19 +179,27 @@ class Simulator:
         h_mag     = float(np.linalg.norm(heading_h))
         heading_h = heading_h / h_mag if h_mag > 1e-9 else np.array([1.0, 0.0, 0.0])
 
+        # ゾーン内の全障害物の反発方向を保存（二次チェック用）
+        threat_dirs: list[np.ndarray] = []
+
         def _add(away: np.ndarray, dist: float, zone: float) -> None:
             w      = (1.0 - dist / zone) ** 2
             away_h = np.array([away[0], away[1], 0.0])
+            n      = float(np.linalg.norm(away_h))
+            if n < 1e-9:
+                return
+            away_h /= n
+            threat_dirs.append(away_h.copy())
             dot    = float(np.dot(away_h, heading_h))
             lat_v  = away_h - dot * heading_h
             lat_m  = float(np.linalg.norm(lat_v))
             if lat_m > 1e-9:
                 repulse[:] += (lat_v / lat_m) * w * 2.0
-            repulse[:] += heading_h * max(-dot, 0.0) * w * 0.3
+            repulse[:] -= heading_h * max(-dot, 0.0) * w * 0.3
 
         for obs in fixed_obs:
             dist = obs.dist_from_surface(pos)
-            if 0.0 < dist < obs.zone:
+            if dist < obs.zone:
                 _add(obs.repulsion_dir(pos), dist, obs.zone)
 
         for obs in moving_obs:
@@ -205,7 +213,19 @@ class Simulator:
             return desired_vel
         new_vel = desired_vel + repulse * desired_speed
         new_spd = float(np.linalg.norm(new_vel))
-        return new_vel * (desired_speed / new_spd) if new_spd > 1e-9 else desired_vel
+        result  = new_vel * (desired_speed / new_spd) if new_spd > 1e-9 else desired_vel
+
+        # ── 二次チェック: 合算後の速度が別の障害物へ向かっていれば成分を除去 ──────
+        # 障害物Aを避けた結果が障害物Bに向かう場合（反発ベクトルの相殺による不整合）を修正する。
+        for away_h in threat_dirs:
+            into = -min(0.0, float(np.dot(result, away_h)))
+            if into > 1e-3:
+                result = result + away_h * into
+                spd = float(np.linalg.norm(result))
+                if spd > 1e-9:
+                    result *= desired_speed / spd
+
+        return result
 
     # ── メイン ─────────────────────────────────────────────────────────────────
 

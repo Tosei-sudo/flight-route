@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Flight Route Planner</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Material Design Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
+
+  <!-- Vuetify 3 -->
+  <link href="https://cdn.jsdelivr.net/npm/vuetify@3.7.15/dist/vuetify.min.css" rel="stylesheet">
+
+  <!-- Leaflet -->
+  <link href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet">
+
+  <style>
+    html, body, #app { height: 100%; margin: 0; padding: 0; }
+
+    #map {
+      height: 100%;
+      width: 100%;
+      z-index: 0;
+    }
+
+    /* ドロワーのスクロールバーをほぼ見えなくする */
+    .drawer-scroll::-webkit-scrollbar { width: 4px; }
+    .drawer-scroll::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
+
+    /* Leaflet マーカーポップアップ */
+    .leaflet-popup-content-wrapper { border-radius: 8px; }
+    .leaflet-popup-content { margin: 10px 14px; }
+
+    /* 軌道ツールチップ */
+    .traj-tip {
+      background: rgba(0,0,0,.78) !important;
+      border: none !important;
+      color: #fff !important;
+      border-radius: 6px !important;
+      font-size: 12px !important;
+      padding: 4px 8px !important;
+    }
+    .traj-tip::before { display: none; }
+
+    /* WP テキストフィールドを小さく */
+    .wp-field .v-field__input { font-size: 12px !important; padding: 4px 6px !important; min-height: 30px !important; }
+    .wp-field .v-label { font-size: 11px !important; }
+
+    /* マップ上に重なる要素 */
+    .map-hint {
+      position: absolute;
+      bottom: 28px;
+      left: 12px;
+      z-index: 999;
+      pointer-events: none;
+    }
+
+    .map-fab {
+      position: absolute;
+      bottom: 80px;
+      right: 16px;
+      z-index: 999;
+    }
+
+    .map-mini-stats {
+      position: absolute;
+      bottom: 148px;
+      right: 16px;
+      z-index: 998;
+    }
+
+    /* モバイル用ドロワーのドラッグハンドル */
+    .drawer-handle-bar {
+      width: 40px;
+      height: 4px;
+      border-radius: 2px;
+      background: #bbb;
+      margin: 0 auto;
+    }
+  </style>
+</head>
+
+<body>
+<div id="app">
+<v-app theme="light">
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━  アプリバー  ━━━━━━━━━━━━━━━━━━━━━ -->
+  <v-app-bar elevation="2" color="blue-darken-3" height="64">
+    <template v-slot:prepend>
+      <!-- モバイル：ハンバーガーでドロワー開閉 -->
+      <v-app-bar-nav-icon
+        v-if="isMobile"
+        @click="drawerOpen = !drawerOpen"
+        title="WPパネルを開く"
+      ></v-app-bar-nav-icon>
+      <v-icon v-else class="ms-2">mdi-airplane-takeoff</v-icon>
+    </template>
+
+    <v-app-bar-title class="font-weight-bold">
+      {{ isMobile ? 'Route Planner' : 'Flight Route Planner' }}
+    </v-app-bar-title>
+
+    <v-spacer></v-spacer>
+
+    <!-- バックエンド状態 チップ（モバイルはアイコンのみ） -->
+    <v-chip
+      :color="mode === 'online' ? 'green-lighten-3' : 'orange-lighten-3'"
+      class="me-2" size="small" variant="flat"
+    >
+      <v-icon start size="14">{{ mode === 'online' ? 'mdi-server-network' : 'mdi-laptop' }}</v-icon>
+      <template v-if="!isMobile">
+        {{ mode === 'online' ? 'サーバー接続中' : 'モック動作中' }}
+      </template>
+    </v-chip>
+
+    <v-btn icon title="ウェイポイントをリセット" @click="resetWaypoints">
+      <v-icon>mdi-refresh</v-icon>
+    </v-btn>
+  </v-app-bar>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━  ナビゲーションドロワー  ━━━━━━━━━━━━━━━━━━━━━
+       デスクトップ: 右側に永続表示 (permanent right)
+       モバイル    : 下からスライド (temporary bottom)                      -->
+  <v-navigation-drawer
+    v-model="drawerOpen"
+    :location="isMobile ? 'bottom' : 'right'"
+    :permanent="!isMobile"
+    :temporary="isMobile"
+    :width="400"
+    :height="isMobile ? '70vh' : undefined"
+    style="z-index: 1001;"
+  >
+    <!-- モバイル：タップで閉じるドラッグハンドル -->
+    <div v-if="isMobile"
+         class="pt-2 pb-1 d-flex justify-center"
+         @click="drawerOpen = false"
+         style="cursor: pointer;">
+      <div class="drawer-handle-bar"></div>
+    </div>
+
+    <!-- スクロール可能なコンテンツ領域 -->
+    <div class="drawer-scroll pa-3"
+         :style="{ height: isMobile ? 'calc(100% - 20px)' : '100%',
+                   overflowY: 'auto',
+                   background: '#f8f9fa' }">
+
+      <!-- ウェイポイント一覧ヘッダー -->
+      <div class="d-flex align-center mb-2">
+        <v-icon size="18" class="me-1" color="blue-darken-2">mdi-map-marker-multiple</v-icon>
+        <span class="text-subtitle-2 font-weight-bold">ウェイポイント</span>
+        <v-spacer></v-spacer>
+        <v-chip size="x-small" color="blue" variant="tonal">{{ waypoints.length }} 点</v-chip>
+      </div>
+
+      <!-- WP リスト -->
+      <div v-for="(wp, i) in waypoints" :key="i"
+           class="mb-2 pa-2 rounded-lg bg-white"
+           style="border: 1px solid #e8eaf6;">
+        <div class="d-flex align-center mb-1">
+          <v-avatar size="22" :color="wpColor(i)" class="me-2">
+            <span style="font-size:11px;font-weight:700;color:#fff">{{ i + 1 }}</span>
+          </v-avatar>
+          <v-text-field
+            v-model="wp.label"
+            density="compact" hide-details variant="plain"
+            style="font-size:12px; font-weight:600;"
+            @change="onWpChange(i)"
+          ></v-text-field>
+          <v-btn icon="mdi-crosshairs-gps" size="x-small" variant="text"
+                 color="blue" title="この WP に移動" @click="flyTo(i)"></v-btn>
+          <v-btn icon="mdi-delete-outline" size="x-small" variant="text"
+                 color="red" @click="removeWp(i)"></v-btn>
+        </div>
+        <div class="d-flex" style="gap:4px;">
+          <v-text-field
+            v-model.number="wp.lat"
+            label="緯度 °" density="compact" hide-details variant="outlined"
+            class="wp-field" @change="onWpChange(i)"
+          ></v-text-field>
+          <v-text-field
+            v-model.number="wp.lon"
+            label="経度 °" density="compact" hide-details variant="outlined"
+            class="wp-field" @change="onWpChange(i)"
+          ></v-text-field>
+          <v-text-field
+            v-model.number="wp.alt"
+            label="高度 m" density="compact" hide-details variant="outlined"
+            class="wp-field" style="max-width:76px;"
+            @change="onWpChange(i)"
+          ></v-text-field>
+        </div>
+      </div>
+
+      <v-btn block variant="tonal" color="blue" size="small"
+             prepend-icon="mdi-plus" class="mb-3 mt-1" @click="addWpAtCenter">
+        マップ中心に追加
+      </v-btn>
+
+      <v-divider class="mb-3"></v-divider>
+
+      <!-- シミュレーション実行 -->
+      <v-btn
+        block color="blue-darken-2" size="large"
+        :loading="simRunning"
+        :disabled="waypoints.length < 2"
+        prepend-icon="mdi-play-circle"
+        class="mb-2"
+        @click="runSimulation"
+      >
+        {{ simRunning ? 'シミュレーション中...' : 'シミュレーション実行' }}
+      </v-btn>
+
+      <v-btn v-if="trajVisible"
+             block variant="outlined" color="grey-darken-1" size="small"
+             prepend-icon="mdi-eye-off" class="mb-3"
+             @click="clearTrajectory">
+        軌道をクリア
+      </v-btn>
+
+      <!-- 速度カラースケール凡例 -->
+      <div v-if="trajVisible && stats" class="mb-3">
+        <div class="text-caption text-grey mb-1">速度カラーマップ</div>
+        <div class="d-flex align-center" style="gap:6px;">
+          <span class="text-caption">{{ stats.min_speed_ms }} m/s</span>
+          <div style="flex:1;height:8px;border-radius:4px;
+                      background:linear-gradient(to right,#2196F3,#4CAF50,#FF5722);"></div>
+          <span class="text-caption">{{ stats.max_speed_ms }} m/s</span>
+        </div>
+      </div>
+
+      <!-- 結果カード -->
+      <v-card v-if="stats" variant="tonal" color="green" class="pa-3 mb-2">
+        <div class="text-subtitle-2 mb-2 d-flex align-center">
+          <v-icon size="18" class="me-1">mdi-check-circle</v-icon>
+          シミュレーション結果
+          <v-chip v-if="mode === 'mock'" size="x-small" class="ms-2" color="orange">MOCK</v-chip>
+        </div>
+        <v-row no-gutters>
+          <v-col cols="6" class="pb-1">
+            <div class="text-caption text-medium-emphasis">飛翔距離</div>
+            <div class="text-body-2 font-weight-bold">{{ stats.total_dist_km }} km</div>
+          </v-col>
+          <v-col cols="6" class="pb-1">
+            <div class="text-caption text-medium-emphasis">飛翔時間</div>
+            <div class="text-body-2 font-weight-bold">{{ fmtTime(stats.total_time_s) }}</div>
+          </v-col>
+          <v-col cols="6">
+            <div class="text-caption text-medium-emphasis">最高速度</div>
+            <div class="text-body-2 font-weight-bold">{{ stats.max_speed_ms }} m/s</div>
+          </v-col>
+          <v-col cols="6">
+            <div class="text-caption text-medium-emphasis">終了状態</div>
+            <div class="text-body-2 font-weight-bold"
+                 :class="stats.hit_ground ? 'text-red' : 'text-green-darken-2'">
+              {{ stats.hit_ground ? '⚠ 地面衝突' : '✓ 正常終了' }}
+            </div>
+          </v-col>
+        </v-row>
+      </v-card>
+
+      <!-- エラー -->
+      <v-alert v-if="simError" type="error" density="compact" closable
+               class="mt-1" @click:close="simError = null">
+        {{ simError }}
+      </v-alert>
+
+    </div><!-- /drawer-scroll -->
+  </v-navigation-drawer>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━  メインコンテンツ（マップ）  ━━━━━━━━━━━━━━━━━━━━━ -->
+  <v-main>
+    <div style="height: calc(100vh - 64px); position: relative;">
+
+      <!-- Leaflet マップ -->
+      <div id="map"></div>
+
+      <!-- マップ操作ヒント -->
+      <div class="map-hint">
+        <v-chip color="white" size="small" class="elevation-2 opacity-90">
+          <v-icon start size="14">mdi-cursor-default-click</v-icon>
+          <span v-if="!isMobile">クリックでウェイポイント追加 / マーカーをドラッグで移動</span>
+          <span v-else>タップでWP追加 / ドラッグで移動</span>
+        </v-chip>
+      </div>
+
+      <!-- モバイル用 FAB（ドロワー開閉） -->
+      <v-btn
+        v-if="isMobile"
+        icon
+        color="blue-darken-3"
+        size="large"
+        elevation="6"
+        class="map-fab"
+        @click="drawerOpen = !drawerOpen"
+      >
+        <v-icon>{{ drawerOpen ? 'mdi-close' : 'mdi-map-marker-edit' }}</v-icon>
+      </v-btn>
+
+      <!-- モバイル：ミニ統計オーバーレイ（ドロワーが閉じているときのみ） -->
+      <div v-if="isMobile && !drawerOpen && stats" class="map-mini-stats">
+        <v-card elevation="4" class="pa-2">
+          <div class="d-flex align-center mb-1">
+            <v-icon size="14" color="green" class="me-1">mdi-check-circle</v-icon>
+            <span class="text-caption font-weight-bold">結果</span>
+          </div>
+          <div class="text-caption">{{ stats.total_dist_km }} km /
+               {{ fmtTime(stats.total_time_s) }}</div>
+          <div class="text-caption">最高 {{ stats.max_speed_ms }} m/s</div>
+        </v-card>
+      </div>
+
+    </div>
+  </v-main>
+
+  <!-- スナックバー -->
+  <v-snackbar v-model="snack.show" :color="snack.color" :timeout="2500" location="bottom end">
+    {{ snack.text }}
+  </v-snackbar>
+
+</v-app>
+</div>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━  スクリプト  ━━━━━━━━━━━━━━━━━━━━━ -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vuetify@3.7.15/dist/vuetify.min.js"></script>
+<script>
+'use strict';
+
+const API_BASE = 'http://localhost:8765/api';
+const PING_TIMEOUT_MS = 1800;
+
+// ━━━━━━━━━━━━━━━━━━━━━  デフォルト WP  ━━━━━━━━━━━━━━━━━━━━━
+const DEFAULT_WPS = [
+  { lat: 45.39521, lon: 141.76507, alt: 0, label: '出発点' },
+  { lat: 41.94444, lon: 143.23149, alt: 0, label: '目的地' },
+];
+
+// ━━━━━━━━━━━━━━━━━━━━━  モックバックエンド  ━━━━━━━━━━━━━━━━━━━━━
+// サーバーが起動していない場合にブラウザ内で動作する擬似バックエンド。
+// 同じインターフェースを持ち、Vue アプリから透過的に利用される。
+class MockBackend {
+  constructor() {
+    this._wps = JSON.parse(JSON.stringify(DEFAULT_WPS));
+    this._jobs = {};
+  }
+
+  async ping() { return { ok: true }; }
+
+  async getWaypoints() { return JSON.parse(JSON.stringify(this._wps)); }
+
+  async setWaypoints(wps) {
+    this._wps = JSON.parse(JSON.stringify(wps));
+    return { ok: true };
+  }
+
+  async startSimulate(wps) {
+    const id = 'mock-' + Date.now();
+    this._jobs[id] = { status: 'running' };
+
+    // 非同期でシミュレーション（フェイク 1.5 秒待機）
+    setTimeout(() => {
+      try {
+        this._jobs[id] = { status: 'done', result: this._simulate(wps) };
+      } catch (e) {
+        this._jobs[id] = { status: 'error', message: String(e) };
+      }
+    }, 1500);
+
+    return { job_id: id };
+  }
+
+  async getJob(id) {
+    return this._jobs[id] || { status: 'not_found' };
+  }
+
+  // ── ブラウザ内簡易シミュレーター ──────────────────────────────────────────
+  // Bezier 補間 + 物理的な加速・減速モデルで軌道を生成する。
+  _simulate(wps) {
+    const EARTH_R = 6371000;
+    const MAX_SPD = 272;
+    const ACCEL   = 50;
+
+    const traj = [];
+    let t = 0, spd = 10;
+
+    const latLonDist = (a, b) => {
+      const dlat = (b.lat - a.lat) * EARTH_R * Math.PI / 180;
+      const dlon = (b.lon - a.lon) * EARTH_R * Math.PI / 180
+                   * Math.cos(a.lat * Math.PI / 180);
+      return Math.hypot(dlat, dlon);
+    };
+
+    const totalDist = wps.reduce((s, w, i) =>
+      i === 0 ? 0 : s + latLonDist(wps[i - 1], w), 0);
+
+    let distTraveled = 0;
+
+    for (let seg = 0; seg < wps.length - 1; seg++) {
+      const a = wps[seg], b = wps[seg + 1];
+      const segDist = latLonDist(a, b);
+      const steps = Math.max(30, Math.floor(segDist / 2000));
+      const dt = 0.5; // seconds
+
+      for (let j = 0; j <= steps; j++) {
+        const f = j / steps;
+
+        // 3 次 Bezier（弧を描く中間点）
+        const mx = (a.lat + b.lat) / 2;
+        const my = (a.lon + b.lon) / 2;
+        const bulge = Math.sin(f * Math.PI) * 0.005 * (Math.random() - 0.5);
+        const lat = a.lat * (1 - f) * (1 - f) + (mx + bulge) * 2 * f * (1 - f) + b.lat * f * f;
+        const lon = a.lon * (1 - f) * (1 - f) + my * 2 * f * (1 - f) + b.lon * f * f;
+        const altProfile = a.alt + (b.alt - a.alt) * f + Math.sin(f * Math.PI) * 1500;
+
+        // 加速・減速モデル
+        const dToEnd = totalDist - distTraveled;
+        const brakeDist = spd * spd / (2 * ACCEL);
+        if (dToEnd > brakeDist && spd < MAX_SPD) {
+          spd = Math.min(spd + ACCEL * dt, MAX_SPD);
+        } else if (dToEnd < brakeDist) {
+          spd = Math.max(spd - ACCEL * dt, 30);
+        }
+        distTraveled += (segDist / steps);
+        t += dt;
+
+        traj.push({
+          lat: parseFloat(lat.toFixed(6)),
+          lon: parseFloat(lon.toFixed(6)),
+          alt: parseFloat(altProfile.toFixed(0)),
+          t:   parseFloat(t.toFixed(1)),
+          spd: parseFloat((spd + (Math.random() - 0.5) * 5).toFixed(1)),
+        });
+      }
+    }
+
+    const speeds = traj.map(p => p.spd);
+    return {
+      trajectory:    traj,
+      hit_ground:    false,
+      total_dist_km: parseFloat((totalDist / 1000).toFixed(2)),
+      total_time_s:  parseFloat(t.toFixed(1)),
+      max_speed_ms:  parseFloat(Math.max(...speeds).toFixed(1)),
+      min_speed_ms:  parseFloat(Math.min(...speeds).toFixed(1)),
+    };
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━  HTTP クライアント  ━━━━━━━━━━━━━━━━━━━━━
+// 実サーバーとのやり取りをモックバックエンドと同じインターフェースに統一。
+const HttpBackend = {
+  async ping() {
+    const res = await fetch(`${API_BASE}/ping`,
+      { signal: AbortSignal.timeout(PING_TIMEOUT_MS) });
+    return res.json();
+  },
+  async getWaypoints() {
+    const res = await fetch(`${API_BASE}/waypoints`);
+    return res.json();
+  },
+  async setWaypoints(wps) {
+    const res = await fetch(`${API_BASE}/waypoints`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(wps),
+    });
+    return res.json();
+  },
+  async startSimulate(wps) {
+    const res = await fetch(`${API_BASE}/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ waypoints: wps }),
+    });
+    return res.json();
+  },
+  async getJob(id) {
+    const res = await fetch(`${API_BASE}/simulate/${id}`);
+    return res.json();
+  },
+};
+
+// ━━━━━━━━━━━━━━━━━━━━━  Vue アプリ  ━━━━━━━━━━━━━━━━━━━━━
+const { createApp } = Vue;
+const { createVuetify } = Vuetify;
+
+const vuetify = createVuetify({
+  icons: { defaultSet: 'mdi' },
+  theme: { defaultTheme: 'light' },
+});
+
+const App = {
+  data() {
+    return {
+      mode:        'checking', // 'online' | 'mock'
+      waypoints:   JSON.parse(JSON.stringify(DEFAULT_WPS)),
+      simRunning:  false,
+      trajVisible: false,
+      stats:       null,
+      simError:    null,
+      snack:       { show: false, text: '', color: 'info' },
+      windowWidth: window.innerWidth,
+      drawerOpen:  false,       // モバイルでのドロワー開閉状態
+    };
+  },
+
+  computed: {
+    isMobile() {
+      return this.windowWidth < 960;
+    },
+  },
+
+  watch: {
+    drawerOpen() {
+      // ドロワー開閉後に Leaflet のサイズを再計算
+      this.$nextTick(() => setTimeout(() => this.$map?.invalidateSize(), 300));
+    },
+    isMobile() {
+      // レイアウト変化後に Leaflet のサイズを再計算
+      this.$nextTick(() => setTimeout(() => this.$map?.invalidateSize(), 300));
+    },
+  },
+
+  // Leaflet オブジェクトは Vue の外で管理（リアクティブ化を避ける）
+  created() {
+    this.$map       = null;
+    this.$markers   = [];
+    this.$trajLayer = null;
+    this.$backend   = null;
+  },
+
+  async mounted() {
+    this._initMap();
+    await this._detectMode();
+    if (this.mode === 'online') {
+      const remote = await this.$backend.getWaypoints().catch(() => null);
+      if (remote && remote.length >= 2) this.waypoints = remote;
+    }
+    this._syncMarkers();
+
+    // ウィンドウリサイズを監視して isMobile を更新
+    window.addEventListener('resize', () => {
+      this.windowWidth = window.innerWidth;
+    });
+  },
+
+  methods: {
+    // ── マップ初期化 ────────────────────────────────────────────────────────
+
+    _initMap() {
+      this.$map = L.map('map');
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 18,
+      }).addTo(this.$map);
+
+      this.$map.on('click', (e) => this._addWpAt(e.latlng.lat, e.latlng.lng));
+      this.$map.setView([43.5, 141.5], 7);
+    },
+
+    // ── モード検出 ──────────────────────────────────────────────────────────
+
+    async _detectMode() {
+      try {
+        const res = await HttpBackend.ping();
+        if (res.ok) {
+          this.$backend = HttpBackend;
+          this.mode = 'online';
+          this._notify('サーバーに接続しました', 'green');
+          return;
+        }
+      } catch { /* fall through */ }
+      this.$backend = new MockBackend();
+      this.mode = 'mock';
+      this._notify('オフライン：モックモードで動作中', 'orange');
+    },
+
+    // ── マーカー管理 ────────────────────────────────────────────────────────
+
+    wpColor(i) {
+      if (i === 0) return 'green-darken-2';
+      if (i === this.waypoints.length - 1) return 'red-darken-2';
+      return 'blue-darken-2';
+    },
+
+    _markerIcon(i) {
+      const n = this.waypoints.length;
+      const bg = i === 0 ? '#2E7D32' : i === n - 1 ? '#C62828' : '#1565C0';
+      return L.divIcon({
+        className: '',
+        html: `<div style="background:${bg};color:#fff;width:32px;height:32px;
+               border-radius:50% 50% 50% 0;transform:rotate(-45deg);
+               display:flex;align-items:center;justify-content:center;
+               border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4);">
+               <span style="transform:rotate(45deg);font-weight:700;font-size:12px;">${i + 1}</span>
+               </div>`,
+        iconSize: [32, 32],
+        iconAnchor: [16, 32],
+        popupAnchor: [0, -36],
+      });
+    },
+
+    _syncMarkers() {
+      // 既存マーカー削除
+      this.$markers.forEach(m => m.remove());
+      this.$markers = [];
+
+      this.waypoints.forEach((wp, i) => {
+        const m = L.marker([wp.lat, wp.lon], {
+          icon: this._markerIcon(i),
+          draggable: true,
+          title: wp.label || `WP${i + 1}`,
+        }).addTo(this.$map);
+
+        m.bindPopup(() => {
+          const el = document.createElement('div');
+          el.innerHTML = `
+            <b style="font-size:13px">${wp.label || `WP${i + 1}`}</b><br>
+            <span style="color:#555;font-size:12px">
+              ${wp.lat.toFixed(5)}°N, ${wp.lon.toFixed(5)}°E<br>
+              高度 ${wp.alt} m
+            </span><br>
+            <button data-idx="${i}"
+              style="margin-top:6px;padding:3px 10px;background:#e53935;color:#fff;
+                     border:none;border-radius:4px;cursor:pointer;font-size:12px;"
+              onclick="window.__flightApp.removeWp(${i})">
+              削除
+            </button>`;
+          return el;
+        });
+
+        m.on('drag', (e) => {
+          const ll = e.target.getLatLng();
+          this.waypoints[i].lat = parseFloat(ll.lat.toFixed(6));
+          this.waypoints[i].lon = parseFloat(ll.lng.toFixed(6));
+        });
+        m.on('dragend', () => {
+          this.$backend.setWaypoints(this.waypoints).catch(() => {});
+        });
+
+        this.$markers.push(m);
+      });
+
+      // 全 WP が見えるようにビューを調整
+      if (this.waypoints.length >= 2) {
+        this.$map.fitBounds(
+          L.latLngBounds(this.waypoints.map(w => [w.lat, w.lon])),
+          { padding: [50, 50] }
+        );
+      }
+    },
+
+    // ── WP 操作 ─────────────────────────────────────────────────────────────
+
+    _addWpAt(lat, lon) {
+      const i = this.waypoints.length;
+      const label = i === 0 ? '出発点'
+                  : i === 1 ? '目的地'
+                  : `経由点${i}`;
+      this.waypoints.push({
+        lat: parseFloat(lat.toFixed(6)),
+        lon: parseFloat(lon.toFixed(6)),
+        alt: 0,
+        label,
+      });
+      this._syncMarkers();
+      this.$backend.setWaypoints(this.waypoints).catch(() => {});
+    },
+
+    addWpAtCenter() {
+      const c = this.$map.getCenter();
+      this._addWpAt(c.lat, c.lng);
+    },
+
+    removeWp(i) {
+      this.waypoints.splice(i, 1);
+      this._syncMarkers();
+      this.$backend.setWaypoints(this.waypoints).catch(() => {});
+    },
+
+    onWpChange(i) {
+      // テキスト入力によるWP変更 → マーカー位置を更新
+      if (this.$markers[i]) {
+        const wp = this.waypoints[i];
+        if (isFinite(wp.lat) && isFinite(wp.lon)) {
+          this.$markers[i].setLatLng([wp.lat, wp.lon]);
+        }
+      }
+      this.$backend.setWaypoints(this.waypoints).catch(() => {});
+    },
+
+    flyTo(i) {
+      const wp = this.waypoints[i];
+      this.$map.flyTo([wp.lat, wp.lon], 11, { duration: 1 });
+      // モバイルではドロワーを閉じてマップを表示
+      if (this.isMobile) this.drawerOpen = false;
+    },
+
+    resetWaypoints() {
+      this.waypoints = JSON.parse(JSON.stringify(DEFAULT_WPS));
+      this.clearTrajectory();
+      this._syncMarkers();
+      this.$backend.setWaypoints(this.waypoints).catch(() => {});
+      this._notify('ウェイポイントをリセットしました');
+    },
+
+    // ── シミュレーション ────────────────────────────────────────────────────
+
+    async runSimulation() {
+      if (this.simRunning || this.waypoints.length < 2) return;
+      // モバイルではドロワーを閉じて軌道をすぐ確認できるようにする
+      if (this.isMobile) this.drawerOpen = false;
+
+      this.simRunning = true;
+      this.simError   = null;
+      this.stats      = null;
+      this.clearTrajectory();
+
+      try {
+        const { job_id, error } = await this.$backend.startSimulate(this.waypoints);
+        if (error) throw new Error(error);
+
+        // ポーリング（1 秒間隔、最大 5 分）
+        const result = await this._pollJob(job_id);
+        this._drawTrajectory(result.trajectory);
+        this.stats = {
+          ...result,
+          min_speed_ms: parseFloat(Math.min(...result.trajectory.map(p => p.spd)).toFixed(1)),
+        };
+        this._notify('シミュレーション完了', 'green');
+      } catch (e) {
+        this.simError = String(e);
+        this._notify('エラーが発生しました', 'red');
+      } finally {
+        this.simRunning = false;
+      }
+    },
+
+    _pollJob(jobId) {
+      return new Promise((resolve, reject) => {
+        let tries = 0;
+        const timer = setInterval(async () => {
+          tries++;
+          if (tries > 300) { clearInterval(timer); reject(new Error('タイムアウト')); return; }
+          try {
+            const job = await this.$backend.getJob(jobId);
+            if (job.status === 'done')   { clearInterval(timer); resolve(job.result); }
+            if (job.status === 'error')  { clearInterval(timer); reject(new Error(job.message || 'error')); }
+          } catch (e) { clearInterval(timer); reject(e); }
+        }, 1000);
+      });
+    },
+
+    // ── 軌道描画 ────────────────────────────────────────────────────────────
+
+    _drawTrajectory(traj) {
+      if (this.$trajLayer) this.$trajLayer.remove();
+
+      const speeds = traj.map(p => p.spd);
+      const minSpd = Math.min(...speeds);
+      const maxSpd = Math.max(...speeds);
+      const norm = s => (s - minSpd) / (maxSpd - minSpd + 0.001);
+
+      // 速度に応じた色（青→緑→赤）
+      const color = (s) => {
+        const t = norm(s);
+        const r = Math.round(t < 0.5 ? 0 : (t - 0.5) * 2 * 255);
+        const g = Math.round(t < 0.5 ? t * 2 * 200 : (1 - t) * 2 * 200);
+        const b = Math.round(t < 0.5 ? (0.5 - t) * 2 * 255 : 0);
+        return `rgb(${r},${g},${b})`;
+      };
+
+      const layers = [];
+      for (let i = 0; i < traj.length - 1; i++) {
+        const a = traj[i], b = traj[i + 1];
+        const line = L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
+          color: color(a.spd), weight: 3, opacity: 0.85,
+        });
+        line.bindTooltip(
+          `速度 ${a.spd} m/s  |  高度 ${a.alt} m  |  t = ${a.t} s`,
+          { className: 'traj-tip', sticky: true }
+        );
+        layers.push(line);
+      }
+
+      this.$trajLayer = L.layerGroup(layers).addTo(this.$map);
+      this.trajVisible = true;
+
+      // 軌道にフィット
+      const bounds = L.latLngBounds(traj.map(p => [p.lat, p.lon]));
+      this.$map.fitBounds(bounds, { padding: [30, 30] });
+    },
+
+    clearTrajectory() {
+      if (this.$trajLayer) { this.$trajLayer.remove(); this.$trajLayer = null; }
+      this.trajVisible = false;
+      this.stats = null;
+    },
+
+    // ── ユーティリティ ──────────────────────────────────────────────────────
+
+    fmtTime(s) {
+      const m = Math.floor(s / 60);
+      const ss = Math.round(s % 60);
+      return m > 0 ? `${m} 分 ${ss} 秒` : `${ss} 秒`;
+    },
+
+    _notify(text, color = 'info') {
+      this.snack = { show: true, text, color };
+    },
+  },
+};
+
+const vApp = createApp(App);
+vApp.use(vuetify);
+const vm = vApp.mount('#app');
+
+// マーカーポップアップの delete ボタン用グローバル参照
+window.__flightApp = vm;
+</script>
+</body>
+</html>

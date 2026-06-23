@@ -140,8 +140,7 @@ class Simulator:
         braking_vz = -float(np.sqrt(2.0 * p.max_accel * remaining))
         return float(max(braking_vz, -desired_speed * 0.15))
 
-    def _valley_dir(self, pos: np.ndarray, speed: float, to_wp_unit: np.ndarray,
-                    fixed_obs: list | None = None) -> np.ndarray:
+    def _valley_dir(self, pos: np.ndarray, speed: float, to_wp_unit: np.ndarray) -> np.ndarray:
         p = self.p
         best_dir, best_score = to_wp_unit.copy(), float('inf')
         for angle_deg in np.linspace(-p.low_valley_fan_deg, p.low_valley_fan_deg, p.low_valley_rays):
@@ -149,22 +148,13 @@ class Simulator:
             c, s = np.cos(a), np.sin(a)
             d = np.array([c*to_wp_unit[0] - s*to_wp_unit[1],
                           s*to_wp_unit[0] + c*to_wp_unit[1]])
-            max_h    = 0.0
-            obs_hit  = False
+            max_h = 0.0
             for t_scan in np.linspace(2.0, p.terrain_lookahead, 8):
-                pt   = np.array([pos[0]+d[0]*speed*t_scan,
-                                 pos[1]+d[1]*speed*t_scan, pos[2]])
+                pt   = np.array([pos[0]+d[0]*speed*t_scan, pos[1]+d[1]*speed*t_scan, 0.0])
                 lat, lon = local_to_geo(pt)
                 max_h = max(max_h, terrain_height_at(lat, lon))
-                if not obs_hit and fixed_obs:
-                    for obs in fixed_obs:
-                        if obs.dist_from_surface(pt) < obs.zone:
-                            obs_hit = True
-                            break
             deviation = abs(angle_deg) / p.low_valley_fan_deg
             score     = max_h + deviation * p.low_valley_cost
-            if obs_hit:
-                score += 1e8   # 障害物ゾーンを通る方向は最優先で除外
             if score < best_score:
                 best_score, best_dir = score, d.copy()
         return best_dir
@@ -215,17 +205,24 @@ class Simulator:
         new_spd = float(np.linalg.norm(new_vel))
         result  = new_vel * (desired_speed / new_spd) if new_spd > 1e-9 else desired_vel
 
-        # ── 二次チェック: 合算後の速度が別の障害物へ向かっていれば成分を除去 ──────
-        # 障害物Aを避けた結果が障害物Bに向かう場合（反発ベクトルの相殺による不整合）を修正する。
+        # ── 二次チェック（球面投影）: 回避後の速度が desired_vel より障害物に近づくなら補正 ──
+        # 基準: desired_vel より各障害物への接近度を悪化させない。
+        # 球面投影で正確に修正する（線形補正後の再正規化による制約再破壊を防ぐ）。
+        desired_unit = desired_vel / desired_speed
+        result_unit  = result / desired_speed       # 速度正規化済みなので |result|=desired_speed
         for away_h in threat_dirs:
-            into = -min(0.0, float(np.dot(result, away_h)))
-            if into > 1e-3:
-                result = result + away_h * into
-                spd = float(np.linalg.norm(result))
-                if spd > 1e-9:
-                    result *= desired_speed / spd
+            baseline = float(np.dot(desired_unit, away_h))
+            actual   = float(np.dot(result_unit,  away_h))
+            if actual < baseline - 1e-4:
+                # result_unit を球面上で away_h 方向へ回転させ dot = baseline にする
+                v_perp     = result_unit - actual * away_h
+                v_perp_mag = float(np.linalg.norm(v_perp))
+                if v_perp_mag > 1e-9:
+                    v_perp     /= v_perp_mag
+                    sin_theta   = float(np.sqrt(max(0.0, 1.0 - baseline ** 2)))
+                    result_unit = baseline * away_h + sin_theta * v_perp
 
-        return result
+        return result_unit * desired_speed
 
     # ── メイン ─────────────────────────────────────────────────────────────────
 
@@ -429,7 +426,7 @@ class Simulator:
             else:  # CRUISE
                 if _profile == 'low':
                     target_z   = floor_z
-                    valley     = self._valley_dir(nav_pos, speed, horiz_dir, fixed_obs)
+                    valley     = self._valley_dir(nav_pos, speed, horiz_dir)
                     wp_pull    = float(np.clip(5000.0 / max(dist_horiz, 1.0), 0.30, 1.0))
                     blended    = wp_pull * horiz_dir + (1.0 - wp_pull) * valley
                     b_mag      = float(np.linalg.norm(blended))

@@ -13,11 +13,13 @@ from config import (MAX_ACCEL, MAX_SPEED, DRAG_K, DT, GDB_OUTPUT_PATH,
                     FLIGHT_PROFILE, LOW_VALLEY_FAN_DEG, LOW_VALLEY_RAYS, LOW_VALLEY_COST,
                     FUEL_CAPACITY, FUEL_BURN_RATE,
                     BATTERY_CAPACITY, BATTERY_DRAIN_RATE, GLIDE_STEER_LIMIT,
+                    USE_GLOBAL_PLANNER, GLOBAL_PLANNER_RESOLUTION,
                     PopupDiveParams, ARHParams)
 from nav import make_sensor
 from terrain import terrain_floor, terrain_height_at
 from geo import local_to_geo
 from obstacles import get_fixed_obstacles, get_moving_obstacles, FixedObstacle, MovingObstacle
+from planner import expand_waypoints
 from atmosphere import air_density_ratio as _air_density_ratio
 from wind import get_wind_field as _get_wind_field
 
@@ -51,6 +53,8 @@ class SimParams:
     battery_capacity:   float          = BATTERY_CAPACITY
     battery_drain_rate: float          = BATTERY_DRAIN_RATE
     glide_steer_limit:  float          = GLIDE_STEER_LIMIT
+    use_global_planner: bool           = USE_GLOBAL_PLANNER
+    planner_resolution: float          = GLOBAL_PLANNER_RESOLUTION
 
 
 PHASE_LAUNCH   = 'launch'
@@ -265,6 +269,15 @@ class Simulator:
 
         fixed_obs  = get_fixed_obstacles()
         moving_obs = get_moving_obstacles()
+
+        if p.use_global_planner:
+            n_before  = len(waypoints)
+            waypoints = expand_waypoints(waypoints, fixed_obs, p.planner_resolution)
+            n_after   = len(waypoints)
+            if n_after > n_before:
+                logger.info("  グローバルパスプランナー: %d → %d WP に展開", n_before, n_after)
+            else:
+                logger.info("  グローバルパスプランナー: 全区間 LOS クリア（中間点なし）")
 
         while wp < len(waypoints) and t < 7200.0:
             wp_pos     = _wp_pos(waypoints[wp], t)

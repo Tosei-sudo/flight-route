@@ -96,6 +96,13 @@ GLIDE_STEER_LIMIT  = 0.35   # 滑空時の最大操舵加速度割合（max_acce
 AVOIDANCE_MARGIN    = 3.0   # 回避ゾーン = 障害物半径 × MARGIN
 COLLISION_LOOKAHEAD = 8.0   # s  移動体の衝突予測先読み時間
 
+# ── グローバルパスプランナー (A*) ─────────────────────────────────────────────
+# 大型障害物・広域禁止空域を run() 実行前に A* で迂回する経路を生成する。
+# リアクティブ回避 (_avoidance_steer) と併用することで、
+# 振動・ハマリ込みを防ぎつつ細かい障害物も回避できる。
+USE_GLOBAL_PLANNER        = True    # True: A* 事前計画を有効化
+GLOBAL_PLANNER_RESOLUTION = 300.0  # m  A* グリッドセル幅（小さいほど精密・低速）
+
 # ── 地理座標ウェイポイント [(緯度°, 経度°, 高度m), ...] ──────────────────────
 import numpy as np
 def _moving_ship(t):

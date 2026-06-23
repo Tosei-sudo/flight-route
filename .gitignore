@@ -1,6 +1,10 @@
 /.vscode
 /flight-env
-/__pycache__
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+coverage.xml
 /DEM/
 /result/
 f-route-py312

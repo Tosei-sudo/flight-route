@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = [
+    "tests/*",
+    "plotter.py",
+    "_debug_arh.py",
+    "_trace_arh.py",
+    "flight_route.py",
+]

@@ -1,5 +1,6 @@
 import glob
 import logging
+import threading
 import numpy as np
 import rasterio
 
@@ -47,19 +48,23 @@ class _TileIndex:
 # ── モジュールレベルの初期化（初回クエリ時に実行）────────────────────────────
 _wide:   _TileIndex | None = None
 _detail: _TileIndex | None = None
+_lock = threading.Lock()
 
 
 def _ensure_init() -> None:
     global _wide, _detail
     if _wide is not None:
         return
-    _wide   = _TileIndex(DEM_WIDE_DIR,   '*')
-    _detail = _TileIndex(DEM_DETAIL_DIR, '*.tif')
-    w, d    = _wide.count, _detail.count
-    if w == 0 and d == 0:
-        logger.warning("DEM タイルが見つかりません。高度 = 0 m で演算します。")
-    else:
-        logger.info("DEM 読み込み: WIDE %d タイル (30m) / DETAIL %d タイル (5m)", w, d)
+    with _lock:
+        if _wide is not None:
+            return
+        _wide   = _TileIndex(DEM_WIDE_DIR,   '*')
+        _detail = _TileIndex(DEM_DETAIL_DIR, '*.tif')
+        w, d    = _wide.count, _detail.count
+        if w == 0 and d == 0:
+            logger.warning("DEM タイルが見つかりません。高度 = 0 m で演算します。")
+        else:
+            logger.info("DEM 読み込み: WIDE %d タイル (30m) / DETAIL %d タイル (5m)", w, d)
 
 
 def terrain_height_at(lat: float, lon: float) -> float:

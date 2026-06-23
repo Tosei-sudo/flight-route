@@ -99,7 +99,7 @@ COLLISION_LOOKAHEAD = 8.0   # s  移動体の衝突予測先読み時間
 # ── 地理座標ウェイポイント [(緯度°, 経度°, 高度m), ...] ──────────────────────
 import numpy as np
 def _moving_ship(t):
-    # 艦船が東に100m/s で移動
+    # 艦船が東に50m/s で移動
     lat0, lon0 = 41.944442, 143.231490
     lon = lon0 + (t * 50.0) / (6371000 * np.cos(np.radians(lat0))) * (180 / np.pi)
     return (lat0, lon, 0)

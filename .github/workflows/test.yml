@@ -34,7 +34,6 @@ jobs:
           pytest tests/ -v \
             --tb=short \
             --cov=. \
-            --cov-omit="tests/*,plotter.py,_debug_arh.py,_trace_arh.py,flight_route.py" \
             --cov-report=term-missing \
             --cov-report=xml
 

@@ -182,12 +182,28 @@ class TestIssue10ThreadSafeSingletons:
             f"{module}.py にダブルチェックロッキングが見つからない"
 
 
-# ── Issue #20: 複数障害物の球面射影（PR #21 未マージ・既知の未修正）──────────
+# ── Issue #20: 複数障害物の球面射影 ──────────────────────────────────────────
 
-class TestIssue20MultiObstacleNote:
-    @pytest.mark.xfail(reason="PR #21 (multi-obstacle spherical projection) is not yet merged to main")
+class TestIssue20MultiObstacleSphericalProjection:
     def test_threat_dirs_second_pass_present(self):
         """`threat_dirs` 二次パス + 球面射影が _avoidance_steer にある"""
         src = inspect.getsource(Simulator._avoidance_steer)
-        assert 'threat_dirs' in src
-        assert 'sin_theta' in src or 'v_perp' in src
+        assert 'threat_dirs' in src, "`threat_dirs` 二次パスが見つからない"
+        assert 'sin_theta' in src or 'v_perp' in src, "球面射影コードが見つからない"
+
+    def test_two_obstacles_no_oscillation(self):
+        """2障害物を同時に避ける際、どちらも侵入しない方向に誘導される"""
+        sim = Simulator(SimParams(nav_mode='gps'))
+        # 左右に障害物を配置、正面方向に進行
+        obs_left  = SphereObstacle(pos=np.array([100.0,  80.0, 0.0]), radius=20.0)
+        obs_right = SphereObstacle(pos=np.array([100.0, -80.0, 0.0]), radius=20.0)
+        pos     = np.array([0.0, 0.0, 0.0])
+        desired = np.array([10.0, 0.0, 0.0])
+        result  = sim._avoidance_steer(pos, desired, 10.0, 0.0,
+                                       [obs_left, obs_right], [])
+        # 結果がどちらの障害物にも向かっていないこと
+        # （Y=0 の対称位置から進んでいれば、対称破れが起きても dist は増加するはず）
+        dist_left  = obs_left.dist_from_surface(result)
+        dist_right = obs_right.dist_from_surface(result)
+        assert dist_left  > obs_left.dist_from_surface(desired)  - 1.0
+        assert dist_right > obs_right.dist_from_surface(desired) - 1.0

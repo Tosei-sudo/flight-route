@@ -205,17 +205,24 @@ class Simulator:
         new_spd = float(np.linalg.norm(new_vel))
         result  = new_vel * (desired_speed / new_spd) if new_spd > 1e-9 else desired_vel
 
-        # ── 二次チェック: 合算後の速度が別の障害物へ向かっていれば成分を除去 ──────
-        # 障害物Aを避けた結果が障害物Bに向かう場合（反発ベクトルの相殺による不整合）を修正する。
+        # ── 二次チェック（球面投影）: 回避後の速度が desired_vel より障害物に近づくなら補正 ──
+        # 基準: desired_vel より各障害物への接近度を悪化させない。
+        # 球面投影で正確に修正する（線形補正後の再正規化による制約再破壊を防ぐ）。
+        desired_unit = desired_vel / desired_speed
+        result_unit  = result / desired_speed       # 速度正規化済みなので |result|=desired_speed
         for away_h in threat_dirs:
-            into = -min(0.0, float(np.dot(result, away_h)))
-            if into > 1e-3:
-                result = result + away_h * into
-                spd = float(np.linalg.norm(result))
-                if spd > 1e-9:
-                    result *= desired_speed / spd
+            baseline = float(np.dot(desired_unit, away_h))
+            actual   = float(np.dot(result_unit,  away_h))
+            if actual < baseline - 1e-4:
+                # result_unit を球面上で away_h 方向へ回転させ dot = baseline にする
+                v_perp     = result_unit - actual * away_h
+                v_perp_mag = float(np.linalg.norm(v_perp))
+                if v_perp_mag > 1e-9:
+                    v_perp     /= v_perp_mag
+                    sin_theta   = float(np.sqrt(max(0.0, 1.0 - baseline ** 2)))
+                    result_unit = baseline * away_h + sin_theta * v_perp
 
-        return result
+        return result_unit * desired_speed
 
     # ── メイン ─────────────────────────────────────────────────────────────────
 

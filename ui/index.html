@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Flight Route Planner</title>
 
   <!-- Bootstrap 5 -->
@@ -26,18 +26,9 @@
       z-index: 0;
     }
 
-    .sidebar {
-      width: 400px;
-      min-width: 400px;
-      height: calc(100vh - 64px);
-      overflow-y: auto;
-      background: #f8f9fa;
-      border-left: 1px solid #e0e0e0;
-    }
-
-    /* スクロールバーをほぼ見えなくする */
-    .sidebar::-webkit-scrollbar { width: 4px; }
-    .sidebar::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
+    /* ドロワーのスクロールバーをほぼ見えなくする */
+    .drawer-scroll::-webkit-scrollbar { width: 4px; }
+    .drawer-scroll::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
 
     /* Leaflet マーカーポップアップ */
     .leaflet-popup-content-wrapper { border-radius: 8px; }
@@ -58,12 +49,36 @@
     .wp-field .v-field__input { font-size: 12px !important; padding: 4px 6px !important; min-height: 30px !important; }
     .wp-field .v-label { font-size: 11px !important; }
 
+    /* マップ上に重なる要素 */
     .map-hint {
       position: absolute;
       bottom: 28px;
       left: 12px;
       z-index: 999;
       pointer-events: none;
+    }
+
+    .map-fab {
+      position: absolute;
+      bottom: 80px;
+      right: 16px;
+      z-index: 999;
+    }
+
+    .map-mini-stats {
+      position: absolute;
+      bottom: 148px;
+      right: 16px;
+      z-index: 998;
+    }
+
+    /* モバイル用ドロワーのドラッグハンドル */
+    .drawer-handle-bar {
+      width: 40px;
+      height: 4px;
+      border-radius: 2px;
+      background: #bbb;
+      margin: 0 auto;
     }
   </style>
 </head>
@@ -75,20 +90,30 @@
   <!-- ━━━━━━━━━━━━━━━━━━━━━  アプリバー  ━━━━━━━━━━━━━━━━━━━━━ -->
   <v-app-bar elevation="2" color="blue-darken-3" height="64">
     <template v-slot:prepend>
-      <v-icon class="ms-2">mdi-airplane-takeoff</v-icon>
+      <!-- モバイル：ハンバーガーでドロワー開閉 -->
+      <v-app-bar-nav-icon
+        v-if="isMobile"
+        @click="drawerOpen = !drawerOpen"
+        title="WPパネルを開く"
+      ></v-app-bar-nav-icon>
+      <v-icon v-else class="ms-2">mdi-airplane-takeoff</v-icon>
     </template>
-    <v-app-bar-title class="font-weight-bold">Flight Route Planner</v-app-bar-title>
+
+    <v-app-bar-title class="font-weight-bold">
+      {{ isMobile ? 'Route Planner' : 'Flight Route Planner' }}
+    </v-app-bar-title>
 
     <v-spacer></v-spacer>
 
-    <!-- バックエンド状態 -->
+    <!-- バックエンド状態 チップ（モバイルはアイコンのみ） -->
     <v-chip
       :color="mode === 'online' ? 'green-lighten-3' : 'orange-lighten-3'"
-      :text-color="mode === 'online' ? 'green-darken-4' : 'orange-darken-4'"
-      class="me-3" size="small" variant="flat"
+      class="me-2" size="small" variant="flat"
     >
       <v-icon start size="14">{{ mode === 'online' ? 'mdi-server-network' : 'mdi-laptop' }}</v-icon>
-      {{ mode === 'online' ? 'サーバー接続中' : 'モック動作中' }}
+      <template v-if="!isMobile">
+        {{ mode === 'online' ? 'サーバー接続中' : 'モック動作中' }}
+      </template>
     </v-chip>
 
     <v-btn icon title="ウェイポイントをリセット" @click="resetWaypoints">
@@ -96,145 +121,197 @@
     </v-btn>
   </v-app-bar>
 
-  <!-- ━━━━━━━━━━━━━━━━━━━━━  メインコンテンツ  ━━━━━━━━━━━━━━━━━━━━━ -->
-  <v-main style="height: calc(100vh - 64px);">
-    <div class="d-flex h-100">
+  <!-- ━━━━━━━━━━━━━━━━━━━━━  ナビゲーションドロワー  ━━━━━━━━━━━━━━━━━━━━━
+       デスクトップ: 右側に永続表示 (permanent right)
+       モバイル    : 下からスライド (temporary bottom)                      -->
+  <v-navigation-drawer
+    v-model="drawerOpen"
+    :location="isMobile ? 'bottom' : 'right'"
+    :permanent="!isMobile"
+    :temporary="isMobile"
+    :width="400"
+    :height="isMobile ? '70vh' : undefined"
+    style="z-index: 1001;"
+  >
+    <!-- モバイル：タップで閉じるドラッグハンドル -->
+    <div v-if="isMobile"
+         class="pt-2 pb-1 d-flex justify-center"
+         @click="drawerOpen = false"
+         style="cursor: pointer;">
+      <div class="drawer-handle-bar"></div>
+    </div>
 
-      <!-- ── マップエリア ── -->
-      <div style="flex: 1; position: relative;">
-        <div id="map"></div>
-        <div class="map-hint">
-          <v-chip color="white" size="small" class="elevation-2 opacity-90">
-            <v-icon start size="14">mdi-cursor-default-click</v-icon>
-            クリックでウェイポイント追加 / マーカーをドラッグで移動
-          </v-chip>
+    <!-- スクロール可能なコンテンツ領域 -->
+    <div class="drawer-scroll pa-3"
+         :style="{ height: isMobile ? 'calc(100% - 20px)' : '100%',
+                   overflowY: 'auto',
+                   background: '#f8f9fa' }">
+
+      <!-- ウェイポイント一覧ヘッダー -->
+      <div class="d-flex align-center mb-2">
+        <v-icon size="18" class="me-1" color="blue-darken-2">mdi-map-marker-multiple</v-icon>
+        <span class="text-subtitle-2 font-weight-bold">ウェイポイント</span>
+        <v-spacer></v-spacer>
+        <v-chip size="x-small" color="blue" variant="tonal">{{ waypoints.length }} 点</v-chip>
+      </div>
+
+      <!-- WP リスト -->
+      <div v-for="(wp, i) in waypoints" :key="i"
+           class="mb-2 pa-2 rounded-lg bg-white"
+           style="border: 1px solid #e8eaf6;">
+        <div class="d-flex align-center mb-1">
+          <v-avatar size="22" :color="wpColor(i)" class="me-2">
+            <span style="font-size:11px;font-weight:700;color:#fff">{{ i + 1 }}</span>
+          </v-avatar>
+          <v-text-field
+            v-model="wp.label"
+            density="compact" hide-details variant="plain"
+            style="font-size:12px; font-weight:600;"
+            @change="onWpChange(i)"
+          ></v-text-field>
+          <v-btn icon="mdi-crosshairs-gps" size="x-small" variant="text"
+                 color="blue" title="この WP に移動" @click="flyTo(i)"></v-btn>
+          <v-btn icon="mdi-delete-outline" size="x-small" variant="text"
+                 color="red" @click="removeWp(i)"></v-btn>
+        </div>
+        <div class="d-flex" style="gap:4px;">
+          <v-text-field
+            v-model.number="wp.lat"
+            label="緯度 °" density="compact" hide-details variant="outlined"
+            class="wp-field" @change="onWpChange(i)"
+          ></v-text-field>
+          <v-text-field
+            v-model.number="wp.lon"
+            label="経度 °" density="compact" hide-details variant="outlined"
+            class="wp-field" @change="onWpChange(i)"
+          ></v-text-field>
+          <v-text-field
+            v-model.number="wp.alt"
+            label="高度 m" density="compact" hide-details variant="outlined"
+            class="wp-field" style="max-width:76px;"
+            @change="onWpChange(i)"
+          ></v-text-field>
         </div>
       </div>
 
-      <!-- ── サイドバー ── -->
-      <div class="sidebar pa-3">
+      <v-btn block variant="tonal" color="blue" size="small"
+             prepend-icon="mdi-plus" class="mb-3 mt-1" @click="addWpAtCenter">
+        マップ中心に追加
+      </v-btn>
 
-        <!-- ウェイポイント一覧 -->
-        <div class="d-flex align-center mb-2">
-          <v-icon size="18" class="me-1" color="blue-darken-2">mdi-map-marker-multiple</v-icon>
-          <span class="text-subtitle-2 font-weight-bold">ウェイポイント</span>
-          <v-spacer></v-spacer>
-          <v-chip size="x-small" color="blue" variant="tonal">{{ waypoints.length }} 点</v-chip>
+      <v-divider class="mb-3"></v-divider>
+
+      <!-- シミュレーション実行 -->
+      <v-btn
+        block color="blue-darken-2" size="large"
+        :loading="simRunning"
+        :disabled="waypoints.length < 2"
+        prepend-icon="mdi-play-circle"
+        class="mb-2"
+        @click="runSimulation"
+      >
+        {{ simRunning ? 'シミュレーション中...' : 'シミュレーション実行' }}
+      </v-btn>
+
+      <v-btn v-if="trajVisible"
+             block variant="outlined" color="grey-darken-1" size="small"
+             prepend-icon="mdi-eye-off" class="mb-3"
+             @click="clearTrajectory">
+        軌道をクリア
+      </v-btn>
+
+      <!-- 速度カラースケール凡例 -->
+      <div v-if="trajVisible && stats" class="mb-3">
+        <div class="text-caption text-grey mb-1">速度カラーマップ</div>
+        <div class="d-flex align-center" style="gap:6px;">
+          <span class="text-caption">{{ stats.min_speed_ms }} m/s</span>
+          <div style="flex:1;height:8px;border-radius:4px;
+                      background:linear-gradient(to right,#2196F3,#4CAF50,#FF5722);"></div>
+          <span class="text-caption">{{ stats.max_speed_ms }} m/s</span>
         </div>
+      </div>
 
-        <!-- WP リスト -->
-        <div v-for="(wp, i) in waypoints" :key="i"
-             class="mb-2 pa-2 rounded-lg bg-white"
-             style="border: 1px solid #e8eaf6;">
+      <!-- 結果カード -->
+      <v-card v-if="stats" variant="tonal" color="green" class="pa-3 mb-2">
+        <div class="text-subtitle-2 mb-2 d-flex align-center">
+          <v-icon size="18" class="me-1">mdi-check-circle</v-icon>
+          シミュレーション結果
+          <v-chip v-if="mode === 'mock'" size="x-small" class="ms-2" color="orange">MOCK</v-chip>
+        </div>
+        <v-row no-gutters>
+          <v-col cols="6" class="pb-1">
+            <div class="text-caption text-medium-emphasis">飛翔距離</div>
+            <div class="text-body-2 font-weight-bold">{{ stats.total_dist_km }} km</div>
+          </v-col>
+          <v-col cols="6" class="pb-1">
+            <div class="text-caption text-medium-emphasis">飛翔時間</div>
+            <div class="text-body-2 font-weight-bold">{{ fmtTime(stats.total_time_s) }}</div>
+          </v-col>
+          <v-col cols="6">
+            <div class="text-caption text-medium-emphasis">最高速度</div>
+            <div class="text-body-2 font-weight-bold">{{ stats.max_speed_ms }} m/s</div>
+          </v-col>
+          <v-col cols="6">
+            <div class="text-caption text-medium-emphasis">終了状態</div>
+            <div class="text-body-2 font-weight-bold"
+                 :class="stats.hit_ground ? 'text-red' : 'text-green-darken-2'">
+              {{ stats.hit_ground ? '⚠ 地面衝突' : '✓ 正常終了' }}
+            </div>
+          </v-col>
+        </v-row>
+      </v-card>
+
+      <!-- エラー -->
+      <v-alert v-if="simError" type="error" density="compact" closable
+               class="mt-1" @click:close="simError = null">
+        {{ simError }}
+      </v-alert>
+
+    </div><!-- /drawer-scroll -->
+  </v-navigation-drawer>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━  メインコンテンツ（マップ）  ━━━━━━━━━━━━━━━━━━━━━ -->
+  <v-main>
+    <div style="height: calc(100vh - 64px); position: relative;">
+
+      <!-- Leaflet マップ -->
+      <div id="map"></div>
+
+      <!-- マップ操作ヒント -->
+      <div class="map-hint">
+        <v-chip color="white" size="small" class="elevation-2 opacity-90">
+          <v-icon start size="14">mdi-cursor-default-click</v-icon>
+          <span v-if="!isMobile">クリックでウェイポイント追加 / マーカーをドラッグで移動</span>
+          <span v-else>タップでWP追加 / ドラッグで移動</span>
+        </v-chip>
+      </div>
+
+      <!-- モバイル用 FAB（ドロワー開閉） -->
+      <v-btn
+        v-if="isMobile"
+        icon
+        color="blue-darken-3"
+        size="large"
+        elevation="6"
+        class="map-fab"
+        @click="drawerOpen = !drawerOpen"
+      >
+        <v-icon>{{ drawerOpen ? 'mdi-close' : 'mdi-map-marker-edit' }}</v-icon>
+      </v-btn>
+
+      <!-- モバイル：ミニ統計オーバーレイ（ドロワーが閉じているときのみ） -->
+      <div v-if="isMobile && !drawerOpen && stats" class="map-mini-stats">
+        <v-card elevation="4" class="pa-2">
           <div class="d-flex align-center mb-1">
-            <v-avatar size="22" :color="wpColor(i)" class="me-2">
-              <span style="font-size:11px;font-weight:700;color:#fff">{{ i + 1 }}</span>
-            </v-avatar>
-            <v-text-field
-              v-model="wp.label"
-              density="compact" hide-details variant="plain"
-              style="font-size:12px; font-weight:600;"
-              @change="onWpChange(i)"
-            ></v-text-field>
-            <v-btn icon="mdi-crosshairs-gps" size="x-small" variant="text"
-                   color="blue" title="この WP に移動" @click="flyTo(i)"></v-btn>
-            <v-btn icon="mdi-delete-outline" size="x-small" variant="text"
-                   color="red" @click="removeWp(i)"></v-btn>
+            <v-icon size="14" color="green" class="me-1">mdi-check-circle</v-icon>
+            <span class="text-caption font-weight-bold">結果</span>
           </div>
-          <div class="d-flex gap-1" style="gap:4px;">
-            <v-text-field
-              v-model.number="wp.lat"
-              label="緯度 °" density="compact" hide-details variant="outlined"
-              class="wp-field" @change="onWpChange(i)"
-            ></v-text-field>
-            <v-text-field
-              v-model.number="wp.lon"
-              label="経度 °" density="compact" hide-details variant="outlined"
-              class="wp-field" @change="onWpChange(i)"
-            ></v-text-field>
-            <v-text-field
-              v-model.number="wp.alt"
-              label="高度 m" density="compact" hide-details variant="outlined"
-              class="wp-field" style="max-width:76px;"
-              @change="onWpChange(i)"
-            ></v-text-field>
-          </div>
-        </div>
-
-        <v-btn block variant="tonal" color="blue" size="small"
-               prepend-icon="mdi-plus" class="mb-3 mt-1" @click="addWpAtCenter">
-          マップ中心に追加
-        </v-btn>
-
-        <v-divider class="mb-3"></v-divider>
-
-        <!-- シミュレーション実行 -->
-        <v-btn
-          block color="blue-darken-2" size="large"
-          :loading="simRunning"
-          :disabled="waypoints.length < 2"
-          prepend-icon="mdi-play-circle"
-          class="mb-2"
-          @click="runSimulation"
-        >
-          {{ simRunning ? 'シミュレーション中...' : 'シミュレーション実行' }}
-        </v-btn>
-
-        <v-btn v-if="trajVisible"
-               block variant="outlined" color="grey-darken-1" size="small"
-               prepend-icon="mdi-eye-off" class="mb-3"
-               @click="clearTrajectory">
-          軌道をクリア
-        </v-btn>
-
-        <!-- 速度カラースケール凡例 -->
-        <div v-if="trajVisible && stats" class="mb-3">
-          <div class="text-caption text-grey mb-1">速度カラーマップ</div>
-          <div class="d-flex align-center" style="gap:6px;">
-            <span class="text-caption">{{ stats.min_speed_ms }} m/s</span>
-            <div style="flex:1;height:8px;border-radius:4px;
-                        background:linear-gradient(to right,#2196F3,#4CAF50,#FF5722);"></div>
-            <span class="text-caption">{{ stats.max_speed_ms }} m/s</span>
-          </div>
-        </div>
-
-        <!-- 結果カード -->
-        <v-card v-if="stats" variant="tonal" color="green" class="pa-3 mb-2">
-          <div class="text-subtitle-2 mb-2 d-flex align-center">
-            <v-icon size="18" class="me-1">mdi-check-circle</v-icon>
-            シミュレーション結果
-            <v-chip v-if="mode === 'mock'" size="x-small" class="ms-2" color="orange">MOCK</v-chip>
-          </div>
-          <v-row no-gutters>
-            <v-col cols="6" class="pb-1">
-              <div class="text-caption text-medium-emphasis">飛翔距離</div>
-              <div class="text-body-2 font-weight-bold">{{ stats.total_dist_km }} km</div>
-            </v-col>
-            <v-col cols="6" class="pb-1">
-              <div class="text-caption text-medium-emphasis">飛翔時間</div>
-              <div class="text-body-2 font-weight-bold">{{ fmtTime(stats.total_time_s) }}</div>
-            </v-col>
-            <v-col cols="6">
-              <div class="text-caption text-medium-emphasis">最高速度</div>
-              <div class="text-body-2 font-weight-bold">{{ stats.max_speed_ms }} m/s</div>
-            </v-col>
-            <v-col cols="6">
-              <div class="text-caption text-medium-emphasis">終了状態</div>
-              <div class="text-body-2 font-weight-bold"
-                   :class="stats.hit_ground ? 'text-red' : 'text-green-darken-2'">
-                {{ stats.hit_ground ? '⚠ 地面衝突' : '✓ 正常終了' }}
-              </div>
-            </v-col>
-          </v-row>
+          <div class="text-caption">{{ stats.total_dist_km }} km /
+               {{ fmtTime(stats.total_time_s) }}</div>
+          <div class="text-caption">最高 {{ stats.max_speed_ms }} m/s</div>
         </v-card>
+      </div>
 
-        <!-- エラー -->
-        <v-alert v-if="simError" type="error" density="compact" closable
-                 class="mt-1" @click:close="simError = null">
-          {{ simError }}
-        </v-alert>
-
-      </div><!-- /sidebar -->
     </div>
   </v-main>
 
@@ -418,22 +495,41 @@ const vuetify = createVuetify({
 const App = {
   data() {
     return {
-      mode:       'checking', // 'online' | 'mock'
-      waypoints:  JSON.parse(JSON.stringify(DEFAULT_WPS)),
-      simRunning: false,
+      mode:        'checking', // 'online' | 'mock'
+      waypoints:   JSON.parse(JSON.stringify(DEFAULT_WPS)),
+      simRunning:  false,
       trajVisible: false,
-      stats:      null,
-      simError:   null,
-      snack:      { show: false, text: '', color: 'info' },
+      stats:       null,
+      simError:    null,
+      snack:       { show: false, text: '', color: 'info' },
+      windowWidth: window.innerWidth,
+      drawerOpen:  false,       // モバイルでのドロワー開閉状態
     };
+  },
+
+  computed: {
+    isMobile() {
+      return this.windowWidth < 960;
+    },
+  },
+
+  watch: {
+    drawerOpen() {
+      // ドロワー開閉後に Leaflet のサイズを再計算
+      this.$nextTick(() => setTimeout(() => this.$map?.invalidateSize(), 300));
+    },
+    isMobile() {
+      // レイアウト変化後に Leaflet のサイズを再計算
+      this.$nextTick(() => setTimeout(() => this.$map?.invalidateSize(), 300));
+    },
   },
 
   // Leaflet オブジェクトは Vue の外で管理（リアクティブ化を避ける）
   created() {
-    this.$map      = null;
-    this.$markers  = [];
+    this.$map       = null;
+    this.$markers   = [];
     this.$trajLayer = null;
-    this.$backend  = null;
+    this.$backend   = null;
   },
 
   async mounted() {
@@ -444,6 +540,11 @@ const App = {
       if (remote && remote.length >= 2) this.waypoints = remote;
     }
     this._syncMarkers();
+
+    // ウィンドウリサイズを監視して isMobile を更新
+    window.addEventListener('resize', () => {
+      this.windowWidth = window.innerWidth;
+    });
   },
 
   methods: {
@@ -594,6 +695,8 @@ const App = {
     flyTo(i) {
       const wp = this.waypoints[i];
       this.$map.flyTo([wp.lat, wp.lon], 11, { duration: 1 });
+      // モバイルではドロワーを閉じてマップを表示
+      if (this.isMobile) this.drawerOpen = false;
     },
 
     resetWaypoints() {
@@ -608,6 +711,9 @@ const App = {
 
     async runSimulation() {
       if (this.simRunning || this.waypoints.length < 2) return;
+      // モバイルではドロワーを閉じて軌道をすぐ確認できるようにする
+      if (this.isMobile) this.drawerOpen = false;
+
       this.simRunning = true;
       this.simError   = null;
       this.stats      = null;
